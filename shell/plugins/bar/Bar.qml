@@ -131,6 +131,39 @@ Item {
     return null
   }
 
+  // Every icon in every module with its measured compass margins and the
+  // rules it breaks, for `omarchy-dev-bar-icon-audit`. Text buttons are
+  // listed too so the scan visibly covers each item, but carry no rules.
+  function auditIcons() {
+    var out = []
+    for (var i = 0; i < moduleSlots.length; i++) {
+      var slot = moduleSlots[i]
+      if (slot && slot.activeItem) collectInk(slot.activeItem, slot.moduleName, out)
+    }
+    return out
+  }
+
+  function collectInk(item, module, out) {
+    if (!item) return
+    var button = "iconOnly" in item
+    var image = "colorized" in item && "inkViolations" in item
+    if (button || image) {
+      out.push({
+        module: module,
+        kind: button
+          ? (item.iconComponent !== null ? (item.iconFrames > 1 ? "animation" : "component") : (item.hasIconGlyph ? "glyph" : "text"))
+          : "image",
+        label: button ? (item.hasIconGlyph ? item.iconText : item.text) : String(item.source),
+        shown: item.visible && item.opacity > 0,
+        canvas: button ? item.opticalSize : item.width,
+        verified: item.inkVerified,
+        compass: item.inkCompass,
+        violations: item.inkViolations
+      })
+    }
+    for (var i = 0; i < item.children.length; i++) collectInk(item.children[i], module, out)
+  }
+
   function unregisterModuleSlot(slot) {
     var next = moduleSlots.filter(function(item) { return item !== slot })
     moduleSlots = next

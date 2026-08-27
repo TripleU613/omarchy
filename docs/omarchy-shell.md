@@ -376,6 +376,12 @@ size-vertical   = 28   # left/right bar width at base-size 12
 
 Set `scale-with-font = false` to keep those bar sizes as fixed pixels.
 
+## Bar icon geometry
+
+Every icon in the bar is sized by the pixels it paints, not by its asset dimensions or font metrics. `shell/Ui/WidgetButton.qml`, the base of every bar button first- and third-party, treats a lone icon glyph, a glyph beside a label (`"󰄀 4"`, `"21% 󰁹"`) and any `iconComponent` the same way: the icon's lit pixels are measured (`shell/Ui/InkMeasure.qml` renders the item and asks ImageMagick for the alpha bounding box, straight and turned 45° for the diagonals) and the icon is scaled and centered so those pixels fill `[bar] icon-canvas`. Glyphs are re-rasterized at a fractional font size and re-measured until they settle, components are transformed, and raster images go through `shell/Ui/AutoCropImage.qml`, which the tray uses. Text keeps its type metrics; a widget whose glyph is a text-sized marker in a run of text sets `normalizeIcon: false` (the workspace dot). Icon-only buttons take `[bar] icon-slot` so they space like built-in icons, and `BarIndicator` declares its smaller canvas.
+
+The rules live in one place, `shell/Commons/IconRules.qml`: pixels above 25% alpha count as lit, and within a tolerance of one logical pixel an icon must fill its canvas along one axis, center on it (N matching S, E matching W) and stay inside it, corners included. Every button verifies its final render against them and exposes `inkCompass` and `inkViolations`; `omarchy-dev-bar-icon-audit` collects these from the live bar through `omarchy-shell shell auditIcons` and fails when any shown icon breaks a rule. The open-panel mark under a module spans the module's icon end to end, from the same measured bounds.
+
 ## Custom bar modules
 
 If a full plugin is overkill, declare a one-off module inline in
