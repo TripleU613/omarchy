@@ -184,14 +184,6 @@ Item {
     NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
   }
 
-  // The icon glyph at its base size, for the aspect the grid is derived from.
-  TextMetrics {
-    id: iconMetrics
-    font.family: root.fontFamily
-    font.pixelSize: Math.max(1, Math.round(root.fontSize))
-    text: root.iconText
-  }
-
   // The label's own space glyph sets the gap between icon and text.
   TextMetrics {
     id: gapMetrics
