@@ -120,6 +120,17 @@ Item {
     moduleSlots = next
   }
 
+  // The first visible icon-bearing button under an item, depth first.
+  function paintedButtonIn(item) {
+    if (!item) return null
+    if ("paintedWidth" in item && "iconOnly" in item) return item.visible ? item : null
+    for (var i = 0; i < item.children.length; i++) {
+      var found = paintedButtonIn(item.children[i])
+      if (found) return found
+    }
+    return null
+  }
+
   function unregisterModuleSlot(slot) {
     var next = moduleSlots.filter(function(item) { return item !== slot })
     moduleSlots = next
@@ -1552,15 +1563,34 @@ Item {
     readonly property bool hovered: moduleHover.hovered
     readonly property bool dragSource: root.barDragSource === slot
     readonly property bool panelOpen: root.activePopout === slot.activeItem
+    // The icon-bearing button inside the module, found when its panel opens,
+    // so the open-panel mark spans the icon's lit pixels end to end instead
+    // of a fraction of whatever slot the module happens to fill.
+    property var paintedButton: null
+    onPanelOpenChanged: if (panelOpen) paintedButton = root.paintedButtonIn(activeItem)
     // Modules bigger than the mark they want (a text label in a padded slot,
-    // a multi-line stack on a vertical bar) can say how long the open-panel
-    // dot should be along the bar, so it tracks what the module paints
-    // instead of a fraction of whatever slot it happens to fill.
+    // a multi-line stack on a vertical bar) can still say how long the mark
+    // should be along the bar.
     readonly property real panelIndicatorExtent: {
       var key = root.vertical ? "openPanelIndicatorHeight" : "openPanelIndicatorWidth"
       var hint = activeItem && key in activeItem ? activeItem[key] : undefined
       if (hint !== undefined && hint !== null && hint > 0) return Math.round(hint)
+      if (paintedButton) {
+        var painted = root.vertical ? paintedButton.paintedHeight : paintedButton.paintedWidth
+        if (painted > 0) return Math.round(painted)
+      }
       return Math.max(Style.space(10), Math.round((root.vertical ? slot.height : slot.width) * 0.55))
+    }
+    // Where along the bar the mark centers: on the painted content when a
+    // button was found, else on the slot.
+    readonly property real panelIndicatorCenter: {
+      if (paintedButton) {
+        var point = paintedButton.mapToItem(slot,
+          paintedButton.paintedX + paintedButton.paintedWidth / 2,
+          paintedButton.paintedY + paintedButton.paintedHeight / 2)
+        return root.vertical ? point.y : point.x
+      }
+      return (root.vertical ? slot.height : slot.width) / 2
     }
     implicitWidth: activeItem && activeItem.visible ? (root.vertical ? root.barSize : activeItem.implicitWidth) : 0
     implicitHeight: activeItem && activeItem.visible ? activeItem.implicitHeight : 0
@@ -1639,9 +1669,9 @@ Item {
       // panel that opens on that side.
       x: root.vertical
         ? (root.position === "left" ? parent.width - width - inset : inset)
-        : Math.round((parent.width - width) / 2)
+        : Math.round(slot.panelIndicatorCenter - width / 2)
       y: root.vertical
-        ? Math.round((parent.height - height) / 2)
+        ? Math.round(slot.panelIndicatorCenter - height / 2)
         : (root.position === "top" ? parent.height - height - inset : inset)
       z: 50
 
@@ -1744,7 +1774,10 @@ Item {
       }
     }
 
-    onActiveItemChanged: Qt.callLater(injectProps)
+    onActiveItemChanged: {
+      paintedButton = null
+      Qt.callLater(injectProps)
+    }
     onModuleSettingsChanged: injectProps()
 
     function injectProps() {

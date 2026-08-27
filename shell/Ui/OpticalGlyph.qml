@@ -1,6 +1,13 @@
 import QtQuick
+import QtQuick.Window
 import qs.Commons
 
+// Places a font glyph by the bounds of its ink instead of its line box, and
+// with `normalize` on sizes the font so that ink fills the item. The font's
+// tight bounding rect gets it within a pixel; the rendered pixels are then
+// measured and the size and position corrected until the glyph meets the
+// shared icon rules, so unlike icons come out at one optical size, centered
+// on the same point.
 Item {
   id: root
 
@@ -8,31 +15,172 @@ Item {
   property string fontFamily: Style.font.family
   property real fontSize: Style.font.body
   property color color: Color.foreground
+  property bool normalize: false
   property bool debugBounds: false
 
   readonly property int renderedFontSize: Math.max(1, Math.round(fontSize))
-  readonly property real tightWidth: Math.max(1, glyphMetrics.tightBoundingRect.width)
-  readonly property real horizontalCorrection: glyph.implicitWidth / 2 - (glyphMetrics.tightBoundingRect.x + tightWidth / 2)
-  readonly property real paintedCenterX: glyph.x + glyphMetrics.tightBoundingRect.x + tightWidth / 2
+  readonly property real baseInkWidth: Math.max(1, baseMetrics.tightBoundingRect.width)
+  readonly property real baseInkHeight: Math.max(1, baseMetrics.tightBoundingRect.height)
+  readonly property real metricScale: normalize && width > 0 && height > 0
+    ? Math.min(width, height) / Math.max(baseInkWidth, baseInkHeight)
+    : 1
+  // Corrections the measured pixels asked for, on top of the metric estimate.
+  property real pixelScale: 1
+  property real pixelOffsetX: 0
+  property real pixelOffsetY: 0
+  readonly property real normalizedScale: metricScale * pixelScale
+  readonly property real tightWidth: baseInkWidth * normalizedScale
+  readonly property real tightHeight: baseInkHeight * normalizedScale
+
+  // A normalized glyph is rasterized at the fractional size that makes its
+  // ink span the item; scaling a native raster instead only magnifies pixels.
+  // Fractional sizes travel as points and Qt maps them back through the same
+  // logical DPI, so an unnormalized glyph keeps its integer pixel size.
+  readonly property real logicalDpi: Screen.logicalPixelDensity > 0 ? Screen.logicalPixelDensity * 25.4 : 96
+  readonly property font glyphFont: normalize
+    ? Qt.font({ family: fontFamily, pointSize: renderedFontSize * normalizedScale * 72 / logicalDpi })
+    : Qt.font({ family: fontFamily, pixelSize: renderedFontSize })
+
+  // Where the rasterized ink sits by the font's account, for centering it
+  // rather than the line box.
+  readonly property real inkWidth: Math.max(1, metrics.tightBoundingRect.width)
+  readonly property real inkHeight: Math.max(1, metrics.tightBoundingRect.height)
+  readonly property real horizontalCorrection: glyph.width / 2 - (metrics.tightBoundingRect.x + inkWidth / 2)
+  // Without normalization the line box stays centered so glyphs of one font
+  // size keep a shared baseline; with it the ink itself is centered.
+  readonly property real verticalCorrection: normalize
+    ? glyph.height / 2 - (glyph.baselineOffset + metrics.tightBoundingRect.y + inkHeight / 2)
+    : 0
   readonly property real baselineY: glyph.y + glyph.baselineOffset
 
+  // Lit-pixel verification. The glyph is rendered, its pixels measured, and
+  // size and position corrected until the rules hold or the passes run out.
+  readonly property var hostWindow: Window.window
+  readonly property real inspectScale: 4 * (Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1)
+  property var inkMeasurement: null
+  property var inkCompass: null
+  property bool inkVerified: !normalize
+  property int inkPasses: 0
+  property int inkRevision: 0
+  // The closest pass so far, restored if later passes only overshoot.
+  property var bestPass: null
+  property bool destroying: false
+  readonly property var inkViolations: normalize ? IconRules.evaluate(inkCompass) : []
+  // The lit box as fractions of this item: measured once the pixels are in,
+  // the font's estimate until then.
+  readonly property rect inkRect: inkMeasurement
+    ? inkMeasurement.rect
+    : Qt.rect(0.5 - tightWidth / (2 * Math.max(1, width)), 0.5 - tightHeight / (2 * Math.max(1, height)),
+        tightWidth / Math.max(1, width), tightHeight / Math.max(1, height))
+  readonly property real paintedCenterX: (inkRect.x + inkRect.width / 2) * width
+  readonly property real paintedCenterY: (inkRect.y + inkRect.height / 2) * height
+
+  // Everything that shapes the render, for the session cache.
+  function inkKey() {
+    return [fontFamily, text, renderedFontSize, width, height, inspectScale].join("|")
+  }
+
+  function applyPass(pass) {
+    pixelScale = pass.pixelScale
+    pixelOffsetX = pass.pixelOffsetX
+    pixelOffsetY = pass.pixelOffsetY
+    inkMeasurement = pass.measurement
+    inkCompass = pass.compass
+  }
+
+  function requestInk() {
+    inkRevision++
+    inkPasses = 0
+    bestPass = null
+    pixelScale = 1
+    pixelOffsetX = 0
+    pixelOffsetY = 0
+    inkMeasurement = null
+    inkCompass = null
+    inkVerified = !normalize
+    if (!normalize) return
+
+    var cached = InkCache.get(inkKey())
+    if (cached) {
+      applyPass(cached)
+      inkVerified = true
+      return
+    }
+    Qt.callLater(measureInk)
+  }
+
+  function measureInk() {
+    if (destroying || !normalize || !hostWindow || width <= 0 || height <= 0 || text === "" || debugBounds) return
+    var requested = inkRevision
+    var key = inkKey()
+    var size = Qt.size(Math.max(1, Math.round(width * inspectScale)), Math.max(1, Math.round(height * inspectScale)))
+    ink.measure(root, size, function(result) {
+      if (!root || root.destroying || requested !== root.inkRevision) return
+      root.inkPasses++
+      if (!result) {
+        if (root.inkPasses < IconRules.maxPasses) Qt.callLater(root.measureInk)
+        return
+      }
+
+      var compass = IconRules.compass(result, root.width, root.height)
+      var pass = { pixelScale: root.pixelScale, pixelOffsetX: root.pixelOffsetX, pixelOffsetY: root.pixelOffsetY,
+        measurement: result, compass: compass }
+      root.inkMeasurement = result
+      root.inkCompass = compass
+      if (!root.bestPass || IconRules.distance(compass) < IconRules.distance(root.bestPass.compass)) root.bestPass = pass
+
+      if (IconRules.evaluate(compass).length === 0 || root.inkPasses >= IconRules.maxPasses) {
+        root.applyPass(root.bestPass)
+        root.inkVerified = true
+        InkCache.set(key, root.bestPass)
+        return
+      }
+
+      // Grow or shrink until the lit box spans the canvas and shift so its
+      // center meets the canvas center, then look again.
+      var r = result.rect
+      var extent = Math.max(r.width * root.width, r.height * root.height)
+      if (extent > 0) root.pixelScale *= Math.min(root.width, root.height) / extent
+      root.pixelOffsetX -= (r.x + r.width / 2 - 0.5) * root.width
+      root.pixelOffsetY -= (r.y + r.height / 2 - 0.5) * root.height
+      Qt.callLater(root.measureInk)
+    })
+  }
+
+  onTextChanged: requestInk()
+  onFontFamilyChanged: requestInk()
+  onRenderedFontSizeChanged: requestInk()
+  onWidthChanged: requestInk()
+  onHeightChanged: requestInk()
+  onNormalizeChanged: requestInk()
+  onHostWindowChanged: if (hostWindow) requestInk()
+  Component.onCompleted: requestInk()
+  Component.onDestruction: destroying = true
+
+  InkMeasure {
+    id: ink
+  }
+
   TextMetrics {
-    id: glyphMetrics
+    id: baseMetrics
     font.family: root.fontFamily
     font.pixelSize: root.renderedFontSize
     text: root.text
   }
 
+  TextMetrics {
+    id: metrics
+    font: root.glyphFont
+    text: root.text
+  }
+
   Text {
     id: glyph
-    // Keep the shared line box and baseline intact. Correcting only the
-    // horizontal painted bounds avoids per-glyph vertical drift.
-    anchors.centerIn: parent
-    anchors.horizontalCenterOffset: root.horizontalCorrection
+    x: (root.width - width) / 2 + root.horizontalCorrection + root.pixelOffsetX
+    y: (root.height - height) / 2 + root.verticalCorrection + root.pixelOffsetY
     text: root.text
     color: root.color
-    font.family: root.fontFamily
-    font.pixelSize: root.renderedFontSize
+    font: root.glyphFont
     renderType: Text.NativeRendering
   }
 
