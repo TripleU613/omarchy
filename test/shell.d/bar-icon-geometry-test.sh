@@ -37,10 +37,12 @@ ShellRoot {
   property int pendingGrabs: 0
   readonly property var icons: [
     bluetooth, network, audio, monitor, power, widgetGlyph, mixed, vector, imageIcon,
+    twoTone, slivered,
     verticalIcon, compactStatusIcon, compactVerticalStatusIcon, horizontalIndicator, verticalIndicator
   ]
   readonly property var iconNames: [
     "bluetooth", "network", "audio", "monitor", "power", "widgetGlyph", "mixed", "vector", "imageIcon",
+    "twoTone", "slivered",
     "verticalIcon", "compactStatusIcon", "compactVerticalStatusIcon", "horizontalIndicator", "verticalIndicator"
   ]
 
@@ -65,8 +67,14 @@ ShellRoot {
       fail(name + " optical canvas is " + icon.opticalSize)
       return false
     }
-    if (Math.abs(icon.opticalCenterErrorX) > 0.5 || Math.abs(icon.opticalCenterErrorY) > 0.5) {
-      fail(name + " painted bounds are over half a pixel off center by " + icon.opticalCenterErrorX + "," + icon.opticalCenterErrorY)
+    // The box around the ink is deliberately not what gets centered: an icon
+    // whose weight sits high in its box is pushed down so the row reads
+    // level, which leaves the box itself off center by design. What must be
+    // centered is the weight.
+    var balance = icon.inkCompass
+    if (balance && (Math.abs(balance.balanceX) > IconRules.slack(balance)
+        || Math.abs(balance.balanceY) > IconRules.slack(balance))) {
+      fail(name + " weight sits off the canvas center by " + balance.balanceX + "," + balance.balanceY)
       return false
     }
     if (icon.glyphPaintedWidth > icon.opticalSize + 2 * IconRules.tolerance || icon.glyphPaintedHeight > icon.opticalSize + 2 * IconRules.tolerance) {
@@ -101,20 +109,67 @@ ShellRoot {
     return true
   }
 
+  // Finds a named part inside a button's icon, to see what brightness the
+  // flattening rule left it at.
+  function partOpacity(item, name) {
+    if (!item) return -1
+    if (item.objectName === name) return item.opacity
+    for (var i = 0; i < item.children.length; i++) {
+      var found = partOpacity(item.children[i], name)
+      if (found >= 0) return found
+    }
+    return -1
+  }
+
+  function checkTwoTone() {
+    var keptSolid = partOpacity(twoTone, "solid")
+    var keptFaded = partOpacity(twoTone, "faded")
+    if (keptSolid !== 1 || Math.abs(keptFaded - 0.24) > 0.001) {
+      fail("a two-tone logo was flattened: " + keptSolid + "," + keptFaded)
+      return false
+    }
+    if (partOpacity(slivered, "sliver") !== 1) {
+      fail("a faded sliver was left dim: " + partOpacity(slivered, "sliver"))
+      return false
+    }
+    return true
+  }
+
   function checkRuleTable() {
     var same = function(a, b) { return JSON.stringify(a) === JSON.stringify(b) }
     if (!same(IconRules.evaluate(null), ["unmeasured"])) return fail("rules accept a missing measurement"), false
-    if (!same(IconRules.evaluate({ n: 0.4, s: 0.6, e: 2.5, w: 2.5, nw: 3, ne: 3, se: 3, sw: 3 }), []))
-      return fail("rules reject an icon that fills one axis and centers"), false
-    if (!same(IconRules.evaluate({ n: 2, s: 2, e: 2, w: 2 }), ["fill"])) return fail("rules miss an icon short of its canvas"), false
-    if (!same(IconRules.evaluate({ n: 0, s: 2, e: 0, w: 0.5 }), ["centered"])) return fail("rules miss an off-center icon"), false
-    if (IconRules.evaluate({ n: 0, s: 0, e: 0, w: 0, nw: -3, ne: 0, se: 0, sw: 0 }).indexOf("contained") === -1)
+    if (!same(IconRules.evaluate({ n: 0.4, s: 0.6, e: 2.5, w: 2.5, nw: 3, ne: 3, se: 3, sw: 3, balanceX: 0, balanceY: 0.2 }), []))
+      return fail("rules reject an icon that fills one axis and balances"), false
+    if (!same(IconRules.evaluate({ n: 2, s: 2, e: 2, w: 2, balanceX: 0, balanceY: 0 }), ["fill"]))
+      return fail("rules miss an icon short of its canvas"), false
+    // A box centered to the pixel still fails if the weight inside it is not:
+    // that is the icon that reads high or low in an otherwise level row.
+    if (!same(IconRules.evaluate({ n: 1, s: 1, e: 0, w: 0, balanceX: 0, balanceY: -2.2 }), ["balanced"]))
+      return fail("rules miss an icon whose weight sits off center"), false
+    if (!same(IconRules.evaluate({ n: 0, s: 2, e: 0, w: 0.5, balanceX: 1.4, balanceY: 0 }), ["balanced"]))
+      return fail("rules miss an off-center icon"), false
+    if (IconRules.evaluate({ n: 0, s: 0, e: 0, w: 0, nw: -3, ne: 0, se: 0, sw: 0, balanceX: 0, balanceY: 0 }).indexOf("contained") === -1)
       return fail("rules miss ink spilling past a corner"), false
-    var compass = IconRules.compass({ rect: Qt.rect(0.25, 0, 0.5, 1), width: 40, height: 40,
+    // One measured pixel is the finest the rule can be held to, so a render
+    // coarser than a logical pixel widens the allowance rather than failing
+    // everything measured in it.
+    if (!same(IconRules.evaluate({ n: 0, s: 1.004, e: 0, w: 0, balanceX: 0, balanceY: 0.5, pixel: 1.004 }), []))
+      return fail("rules fail an icon by less than the pixel it was measured in"), false
+    var compass = IconRules.compass({ rect: Qt.rect(0.25, 0, 0.5, 1), centroid: Qt.point(0.5, 0.75), width: 40, height: 40,
       diagonal: Qt.rect(0.2, 0.2, 0.6, 0.6), diagonalWidth: 56, diagonalHeight: 56 }, 16, 16)
     if (Math.abs(compass.n) > 0.001 || Math.abs(compass.s) > 0.001 || Math.abs(compass.w - 4) > 0.001 || Math.abs(compass.e - 4) > 0.001
         || Math.abs(compass.nw - 4.48) > 0.001 || Math.abs(compass.se - 4.48) > 0.001)
       return fail("compass margins are not scaled to the canvas: " + JSON.stringify(compass)), false
+    if (Math.abs(compass.balanceX) > 0.001 || Math.abs(compass.balanceY - 4) > 0.001)
+      return fail("compass does not report where the ink balances: " + JSON.stringify(compass)), false
+    // Weight is brought onto the center only as far as the box has room, and
+    // never on the axis the icon already fills.
+    var shift = IconRules.balanceShift(Qt.rect(0, 0.2, 1, 0.6), Qt.point(0.5, 0.65))
+    if (Math.abs(shift.x) > 0.001 || Math.abs(shift.y + 0.15) > 0.001)
+      return fail("balance shift does not center the weight: " + JSON.stringify(shift)), false
+    var pinned = IconRules.balanceShift(Qt.rect(0, 0, 1, 1), Qt.point(0.3, 0.7))
+    if (Math.abs(pinned.x) > 0.001 || Math.abs(pinned.y) > 0.001)
+      return fail("balance shift pushes a filled icon off its canvas: " + JSON.stringify(pinned)), false
     return true
   }
 
@@ -137,6 +192,7 @@ ShellRoot {
 
   function runChecks() {
     if (!checkRuleTable()) return
+    if (!checkTwoTone()) return
     if (!checkSplit("󰂯", "󰂯", "", true)) return
     if (!checkSplit("󰄀 4", "󰄀", "4", true)) return
     if (!checkSplit("21% 󰁹", "󰁹", "21%", false)) return
@@ -308,6 +364,30 @@ ShellRoot {
         id: vector
         bar: testBar
         iconComponent: Component { Item { Rectangle { anchors.centerIn: parent; width: 12; height: 12 } } }
+      }
+      // A logo genuinely drawn in two tones: half of it is the second tone,
+      // so it is left as its author drew it.
+      BarIconButton {
+        id: twoTone
+        bar: testBar
+        iconComponent: Component {
+          Item {
+            Rectangle { objectName: "solid"; x: 0; y: 4; width: 8; height: 8; color: "white" }
+            Rectangle { objectName: "faded"; x: 8; y: 4; width: 8; height: 8; color: "white"; opacity: 0.24 }
+          }
+        }
+      }
+      // The same fade over a sliver of the mark is an accident, and goes back
+      // to full.
+      BarIconButton {
+        id: slivered
+        bar: testBar
+        iconComponent: Component {
+          Item {
+            Rectangle { objectName: "solid"; x: 0; y: 4; width: 15; height: 8; color: "white" }
+            Rectangle { objectName: "sliver"; x: 15; y: 4; width: 1; height: 8; color: "white"; opacity: 0.24 }
+          }
+        }
       }
       BarIconButton {
         id: imageIcon

@@ -23,21 +23,26 @@ if (( json_only )); then
 fi
 
 # Margins are logical pixels from the canvas edge (N S E W) and from its
-# corners along the diagonals (NW NE SE SW) to the nearest lit pixel. The
-# rules themselves live in shell/Commons/IconRules.qml.
-printf '%-44s %-9s %-6s %5s %5s %5s %5s %5s %5s %5s %5s  %s\n' MODULE KIND LABEL N S E W NW NE SE SW RESULT
+# corners along the diagonals (NW NE SE SW) to the nearest inked pixel. BX and
+# BY are how far the icon's weight sits from the center of its canvas, which
+# is what decides whether it reads level with the rest of the row. The rules
+# themselves live in shell/Commons/IconRules.qml.
+printf '%-44s %-9s %-6s %5s %5s %5s %5s %6s %6s %5s %5s %5s %5s  %s\n' \
+  MODULE KIND LABEL N S E W BX BY NW NE SE SW RESULT
 jq -r '
   def cell: if . == null then "-" else ((. * 10 | round) / 10 | tostring) end;
   .[] | select(.shown) |
   [ .module, .kind, .label,
     (.compass.n | cell), (.compass.s | cell), (.compass.e | cell), (.compass.w | cell),
+    (.compass.balanceX | cell), (.compass.balanceY | cell),
     (.compass.nw | cell), (.compass.ne | cell), (.compass.se | cell), (.compass.sw | cell),
     (if .kind == "text" then "text, no rules"
      elif (.verified | not) then "still measuring"
      elif (.violations | length) == 0 then "ok"
      else "FAIL " + (.violations | join(",")) end) ] | @tsv' <<<"$report" |
-  while IFS=$'\t' read -r module kind label n s e w nw ne se sw result; do
-    printf '%-44s %-9s %-6s %5s %5s %5s %5s %5s %5s %5s %5s  %s\n' "$module" "$kind" "$label" "$n" "$s" "$e" "$w" "$nw" "$ne" "$se" "$sw" "$result"
+  while IFS=$'\t' read -r module kind label n s e w bx by nw ne se sw result; do
+    printf '%-44s %-9s %-6s %5s %5s %5s %5s %6s %6s %5s %5s %5s %5s  %s\n' \
+      "$module" "$kind" "$label" "$n" "$s" "$e" "$w" "$bx" "$by" "$nw" "$ne" "$se" "$sw" "$result"
   done
 
 failing=$(jq '[ .[] | select(.shown and .kind != "text" and ((.verified | not) or (.violations | length) > 0)) ] | length' <<<"$report")

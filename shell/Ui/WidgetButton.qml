@@ -38,6 +38,11 @@ Item {
   // to the optical canvas. A button whose glyph is a text-sized marker in a
   // run of text (the workspace dot) turns this off and keeps type metrics.
   property bool normalizeIcon: true
+  // One mark, one brightness — unless the mark really is drawn in two tones.
+  // A logo whose second tone covers a fair share of it is a two-tone logo and
+  // is left as drawn; a sliver of one faded against the rest of its own icon
+  // is an accident and is brought back to full.
+  property bool flattenIcon: true
   // The canvas an icon's ink fills. One size for every button, whatever font
   // size its label happens to use; a component meant to read smaller (the
   // status indicators) declares its own.
@@ -195,8 +200,10 @@ Item {
         id: iconFit
 
         property rect inkRect: Qt.rect(0, 0, 1, 1)
+        property point inkCentroid: Qt.point(0.5, 0.5)
         property bool measured: false
         property var measuredBoxes: ({})
+        property var measuredCentroids: ({})
         property var watchedItems: []
         property int revision: 0
         property bool verified: false
@@ -213,14 +220,25 @@ Item {
         readonly property real fitScale: inkRect.width > 0 && inkRect.height > 0
           ? Math.min(width, height) / Math.max(inkRect.width * width, inkRect.height * height)
           : 1
+        // Where the ink lands once the fit has scaled it about the center,
+        // and the shift from there that brings its weight onto the canvas
+        // center. Scaling answers how far the icon reaches; the shift answers
+        // where it weighs, so an icon with its mass off to one side comes out
+        // level with the rest of the row instead of merely boxed like it.
+        readonly property rect fittedRect: Qt.rect(0.5 + (inkRect.x - 0.5) * fitScale,
+          0.5 + (inkRect.y - 0.5) * fitScale, inkRect.width * fitScale, inkRect.height * fitScale)
+        readonly property point fittedCentroid: Qt.point(0.5 + (inkCentroid.x - 0.5) * fitScale,
+          0.5 + (inkCentroid.y - 0.5) * fitScale)
+        readonly property point fitShift: IconRules.balanceShift(fittedRect, fittedCentroid,
+          IconRules.balanceAllowance(Math.min(width, height)))
 
         visible: root.iconComponent !== null
         width: parent.width
         height: parent.height
         scale: fitScale
         transformOrigin: Item.Center
-        x: -((inkRect.x + inkRect.width / 2) * width - width / 2) * fitScale
-        y: -((inkRect.y + inkRect.height / 2) * height - height / 2) * fitScale
+        x: fitShift.x * width
+        y: fitShift.y * height
 
         function imageLike(item) {
           return "source" in item && "status" in item
@@ -251,16 +269,63 @@ Item {
           for (var i = 0; i < item.children.length; i++) watchItem(item.children[i])
         }
 
+        // What the mark actually paints: the visible items with nothing
+        // visible inside them.
+        function leaves(item, into) {
+          if (!item || !item.visible) return into
+          var encloses = false
+          for (var i = 0; i < item.children.length; i++) {
+            if (item.children[i].visible) {
+              encloses = true
+              leaves(item.children[i], into)
+            }
+          }
+          if (!encloses) into.push(item)
+          return into
+        }
+
+        // Weighs the faded parts of a mark against the whole of it. A second
+        // tone covering a fair share of the icon is the logo being drawn in
+        // two tones, and is left as its author drew it; anything less is one
+        // part faded against the rest of its own icon by accident, and goes
+        // back to full. A fade covering every part alike never registers,
+        // which is right: that is the widget signalling a state over its
+        // icon, not the icon painted in two brightnesses.
+        //
+        // Either way the geometry is unaffected — shape is taken before
+        // brightness, so a two-tone mark measures exactly like a solid one.
+        // Flattening runs before the watchers are attached, so the first pass
+        // does not report itself back as a change.
+        function flatten(item) {
+          if (!item || !root.flattenIcon) return
+          var painted = leaves(item, [])
+          var total = 0, faded = 0, dim = []
+          for (var i = 0; i < painted.length; i++) {
+            var part = painted[i]
+            var area = Math.max(0, part.width) * Math.max(0, part.height)
+            total += area
+            if ("opacity" in part && part.opacity > 0 && part.opacity < 1) {
+              faded += area
+              dim.push(part)
+            }
+          }
+          if (total <= 0 || faded / total >= IconRules.twoToneMinShare) return
+          for (var j = 0; j < dim.length; j++) dim[j].opacity = 1
+        }
+
         function watch() {
           if (root.destroying) return
           measuredBoxes = {}
+          measuredCentroids = {}
           shownBoxes = {}
           shownCompasses = {}
           measured = false
           verified = false
           compass = null
           inkRect = Qt.rect(0, 0, 1, 1)
+          inkCentroid = Qt.point(0.5, 0.5)
           shownRect = Qt.rect(0, 0, 1, 1)
+          flatten(iconLoader.item)
           watchItem(iconLoader.item)
           requestMeasure()
         }
@@ -312,6 +377,19 @@ Item {
           return unionOf(measuredBoxes)
         }
 
+        // An animation is fitted to the union of its frames, so it balances
+        // on where those frames weigh together rather than swaying frame by
+        // frame.
+        function meanCentroid(points) {
+          var x = 0, y = 0, n = 0
+          for (var key in points) {
+            x += points[key].x
+            y += points[key].y
+            n++
+          }
+          return n > 0 ? Qt.point(x / n, y / n) : Qt.point(0.5, 0.5)
+        }
+
         function requestMeasure() {
           revision++
           Qt.callLater(measure)
@@ -323,6 +401,7 @@ Item {
           var key = signature()
           if (key in measuredBoxes) {
             inkRect = unionBox()
+            inkCentroid = meanCentroid(measuredCentroids)
             measured = true
             requestVerify()
             return
@@ -337,7 +416,11 @@ Item {
             var boxes = iconFit.measuredBoxes
             boxes[key] = result.rect
             iconFit.measuredBoxes = boxes
+            var centroids = iconFit.measuredCentroids
+            centroids[key] = result.centroid
+            iconFit.measuredCentroids = centroids
             iconFit.inkRect = iconFit.unionBox()
+            iconFit.inkCentroid = iconFit.meanCentroid(centroids)
             iconFit.measured = true
             iconFit.requestVerify()
             if (requested !== iconFit.revision) Qt.callLater(iconFit.measure)
