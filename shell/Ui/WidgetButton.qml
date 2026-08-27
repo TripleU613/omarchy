@@ -124,13 +124,20 @@ Item {
   readonly property var inkViolations: hasIcon ? IconRules.evaluate(inkCompass) : []
   // The lit box as fractions of the optical canvas.
   readonly property rect inkRect: iconComponent !== null ? iconFit.shownRect : (hasIconGlyph ? glyph.inkRect : Qt.rect(0, 0, 1, 1))
-  // What the button paints, in its own coordinates: an icon's lit pixels, or
-  // the icon-and-label content. The bar's open-panel mark spans this end to
-  // end.
-  readonly property real paintedX: iconOnly ? content.x + opticalCanvas.x + inkRect.x * opticalCanvas.width : content.x
-  readonly property real paintedY: iconOnly ? content.y + opticalCanvas.y + inkRect.y * opticalCanvas.height : content.y
-  readonly property real paintedWidth: iconOnly ? inkRect.width * opticalCanvas.width : content.width
-  readonly property real paintedHeight: iconOnly ? inkRect.height * opticalCanvas.height : content.height
+  // What the button paints, in its own coordinates: an icon's canvas, or the
+  // icon-and-label content. The bar's open-panel mark spans this end to end.
+  //
+  // For an icon it is the canvas, not the ink inside it. Every icon fills the
+  // same canvas but reaches it with a different silhouette, so a mark drawn
+  // to the ink comes out a different length under each icon — wide under the
+  // wifi arc, narrow under the battery — and the row of them reads as ragged.
+  // The canvas is the one extent every icon shares, so the mark is the same
+  // length wherever it appears, and still exactly as wide as the icon it sits
+  // under.
+  readonly property real paintedX: iconOnly ? content.x + opticalCanvas.x : content.x
+  readonly property real paintedY: iconOnly ? content.y + opticalCanvas.y : content.y
+  readonly property real paintedWidth: iconOnly ? opticalCanvas.width : content.width
+  readonly property real paintedHeight: iconOnly ? opticalCanvas.height : content.height
 
   readonly property var hostWindow: Window.window
   readonly property real devicePixelRatio: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
