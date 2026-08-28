@@ -127,22 +127,35 @@ Item {
         measurement: result, compass: compass }
       root.inkMeasurement = result
       root.inkCompass = compass
-      if (!root.bestPass || IconRules.distance(compass) < IconRules.distance(root.bestPass.compass)) root.bestPass = pass
+      var best = root.bestPass ? IconRules.distance(root.bestPass.compass) : Infinity
+      var reached = IconRules.distance(compass)
+      if (reached < best) root.bestPass = pass
 
-      if (IconRules.evaluate(compass).length === 0 || root.inkPasses >= IconRules.maxPasses) {
+      // Passes run until the glyph stops getting better, not until it is
+      // merely inside tolerance. A native glyph can only be placed on whole
+      // device pixels, so the last fraction of a pixel is not correctable and
+      // a pass that no longer improves has found that floor; stopping at the
+      // first acceptable pass instead leaves each glyph wherever it first
+      // landed, which is what makes a row of them sit at slightly different
+      // heights.
+      if (reached >= best - 0.01 || root.inkPasses >= IconRules.maxPasses) {
         root.applyPass(root.bestPass)
         root.inkVerified = true
         InkCache.set(key, root.bestPass)
         return
       }
 
-      // Grow or shrink until the lit box spans the canvas and shift so its
-      // center meets the canvas center, then look again.
+      // Grow or shrink until the ink spans the canvas, shift until its
+      // weight sits on the canvas center, then look again. Size answers to
+      // how far the glyph reaches and position to where it weighs, so a
+      // top-heavy or bottom-heavy glyph comes out level with its neighbours
+      // rather than merely boxed like them.
       var r = result.rect
       var extent = Math.max(r.width * root.width, r.height * root.height)
       if (extent > 0) root.pixelScale *= Math.min(root.width, root.height) / extent
-      root.pixelOffsetX -= (r.x + r.width / 2 - 0.5) * root.width
-      root.pixelOffsetY -= (r.y + r.height / 2 - 0.5) * root.height
+      var shift = IconRules.balanceShift(r, result.centroid, IconRules.balanceAllowance(Math.min(root.width, root.height)))
+      root.pixelOffsetX += shift.x * root.width
+      root.pixelOffsetY += shift.y * root.height
       Qt.callLater(root.measureInk)
     })
   }

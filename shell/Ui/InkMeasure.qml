@@ -3,12 +3,18 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 
-// Measures where an item's lit pixels reach. The item is rendered to a
-// temporary image and ImageMagick reports the bounding box of its alpha
-// above the lit threshold, both straight and turned 45° for the diagonals.
-// Boxes come back as fractions of their render, so they hold at any display
-// size. One measurement runs at a time; a request made meanwhile replaces
-// any earlier pending one.
+// Measures where an item's ink sits and how far it reaches. The item is
+// rendered to a temporary image; ImageMagick reduces the render to the shape
+// it paints, blurs that shape into one soft mass and cuts the mass at half
+// its peak, then reports the box it occupies, the box of the same render
+// turned 45° for the diagonals, and where its weight balances.
+//
+// The shape is taken before the blur, so how brightly a part was painted
+// never changes where the icon is measured to be: a logo drawn in two tones
+// measures the same as the same logo drawn in one. Boxes and centroids come
+// back as fractions of their render, so they hold at any display size. One
+// measurement runs at a time; a request made meanwhile replaces any earlier
+// pending one.
 Item {
   id: root
 
@@ -28,13 +34,15 @@ Item {
   Component.onDestruction: destroying = true
 
   // Renders `target` at `pixelSize` and calls done(result) with
-  //   rect            lit box as fractions of the render
+  //   rect            ink box as fractions of the render
+  //   centroid        where the ink balances, as fractions of the render
   //   width, height   render size in pixels
-  //   diagonal        lit box of the render turned 45°, as fractions of that
+  //   diagonal        ink box of the render turned 45°, as fractions of that
   //                   turned render, or null
   //   diagonalWidth, diagonalHeight
-  // An image lit to its edges yields the full box, since there is nothing to
-  // trim; a render with no lit pixels at all, or one that failed, yields null.
+  // An image inked to its edges yields the full box, since there is nothing
+  // to trim; a render with no ink at all, one whose ink never rises above
+  // antialiasing fringe, or one that failed, yields null.
   function measure(target, pixelSize, done) {
     pending = { target: target, pixelSize: pixelSize, done: done }
     Qt.callLater(start)
@@ -57,11 +65,21 @@ Item {
         return
       }
       // The render is consumed in one go and removed by the same command, so
-      // nothing lingers however the shell exits. The turned copy is reported
-      // first, the straight render last with its lit fraction.
+      // nothing lingers however the shell exits. Everything above the fringe
+      // becomes shape before the blur, so the cut cannot depend on how opaque
+      // the icon was painted; the alpha's own peak is kept from before that,
+      // to tell a faint mark from an empty render. The two ramps weigh the
+      // shape against a gradient across each axis, which is where it balances.
       inspector.command = ["bash", "-c",
-        'magick "$1" -alpha extract -threshold "$2" \\( +clone -background black -rotate 45 -format "%w %h %@\\n" -write info: +delete \\) -format "%w %h %@ %[fx:mean]\\n" info:; rm -f -- "$1"',
-        "omarchy-shell-ink", root.renderPath, Math.round(IconRules.litAlpha * 100) + "%"]
+        'magick "$1" -alpha extract -set option:peak "%[fx:maxima]" -threshold "$3" -blur 0x"$2" -threshold "$4" -write mpr:mask'
+          + ' \\( +clone -sparse-color barycentric "0,0 black %[fx:w-1],0 white" \\) -compose multiply -composite -format "%[fx:mean] " -write info: +delete'
+          + ' mpr:mask \\( +clone -sparse-color barycentric "0,0 black 0,%[fx:h-1] white" \\) -compose multiply -composite -format "%[fx:mean] " -write info: +delete'
+          + ' mpr:mask \\( +clone -background black -rotate 45 -format "%w %h %@ " -write info: +delete \\)'
+          + ' -format "%w %h %@ %[fx:mean] %[peak]\\n" info:; rm -f -- "$1"',
+        "omarchy-shell-ink", root.renderPath,
+        String(IconRules.blurRadius(request.pixelSize.width, request.pixelSize.height)),
+        Math.round(IconRules.fringeAlpha * 100) + "%",
+        Math.round(IconRules.opticalLevel * 100) + "%"]
       inspector.running = true
     }, request.pixelSize)
     if (!grabbing) finish(null)
@@ -74,37 +92,57 @@ Item {
     if (pending) Qt.callLater(start)
   }
 
-  // Lines of "W H wxh+x+y" for the turned render, then "W H wxh+x+y mean"
-  // for the straight one. Uniform alpha gives an empty box, which is either
-  // nothing lit (mean 0) or lit throughout.
+  // One line of
+  //   rampX rampY turnedW turnedH turnedBox W H box coverage peak
+  // `peak` is the alpha's highest point before the shape was taken: ink that
+  // never rises above antialiasing fringe is not ink. A cut that takes
+  // everything or nothing leaves an empty box, which is either an empty
+  // render (coverage 0) or one inked throughout. Each ramp is the shape
+  // weighed against a gradient running the length of one axis; divided by the
+  // coverage it gives where the ink balances on that axis.
   function parse(text) {
-    var lines = String(text || "").trim().split("\n")
-    var box = /^\s*(\d+)\s+(\d+)\s+(\d+)x(\d+)\+(\d+)\+(\d+)(?:\s+([0-9.eE+-]+))?/
-    var straight = box.exec(lines[lines.length - 1] || "")
-    if (!straight) return null
-    var width = Number(straight[1]), height = Number(straight[2])
-    var inkWidth = Number(straight[3]), inkHeight = Number(straight[4])
-    if (width <= 0 || height <= 0) return null
+    var fields = String(text || "").trim().split(/\s+/)
+    if (fields.length < 10) return null
 
-    var result = { rect: null, width: width, height: height, diagonal: null, diagonalWidth: 0, diagonalHeight: 0 }
+    var box = /^(\d+)x(\d+)\+(\d+)\+(\d+)$/
+    var rampX = Number(fields[0]), rampY = Number(fields[1])
+    var turnedWidth = Number(fields[2]), turnedHeight = Number(fields[3])
+    var turned = box.exec(fields[4])
+    var width = Number(fields[5]), height = Number(fields[6])
+    var straight = box.exec(fields[7])
+    var coverage = Number(fields[8]), peak = Number(fields[9])
+
+    if (!straight || !(width > 0) || !(height > 0)) return null
+    if (!(peak > IconRules.fringeAlpha)) return null
+    if (!(coverage > 0)) return null
+
+    var inkWidth = Number(straight[1]), inkHeight = Number(straight[2])
+    var result = {
+      rect: null,
+      // The ramps run black to white across w-1 pixels, so a mean read
+      // against them is a fraction of that span rather than of the render.
+      centroid: Qt.point(width > 1 ? (rampX / coverage) * (width - 1) / width : 0.5,
+        height > 1 ? (rampY / coverage) * (height - 1) / height : 0.5),
+      width: width,
+      height: height,
+      diagonal: null,
+      diagonalWidth: 0,
+      diagonalHeight: 0
+    }
     if (inkWidth <= 0 || inkHeight <= 0) {
-      if (!(Number(straight[7]) > 0)) return null
       result.rect = Qt.rect(0, 0, 1, 1)
+      result.centroid = Qt.point(0.5, 0.5)
     } else {
-      result.rect = Qt.rect(Number(straight[5]) / width, Number(straight[6]) / height, inkWidth / width, inkHeight / height)
+      result.rect = Qt.rect(Number(straight[3]) / width, Number(straight[4]) / height, inkWidth / width, inkHeight / height)
     }
 
-    if (lines.length >= 2) {
-      var turned = box.exec(lines[0])
-      if (turned) {
-        var turnedWidth = Number(turned[1]), turnedHeight = Number(turned[2])
-        var turnedInkWidth = Number(turned[3]), turnedInkHeight = Number(turned[4])
-        if (turnedWidth > 0 && turnedHeight > 0 && turnedInkWidth > 0 && turnedInkHeight > 0) {
-          result.diagonal = Qt.rect(Number(turned[5]) / turnedWidth, Number(turned[6]) / turnedHeight,
-            turnedInkWidth / turnedWidth, turnedInkHeight / turnedHeight)
-          result.diagonalWidth = turnedWidth
-          result.diagonalHeight = turnedHeight
-        }
+    if (turned && turnedWidth > 0 && turnedHeight > 0) {
+      var turnedInkWidth = Number(turned[1]), turnedInkHeight = Number(turned[2])
+      if (turnedInkWidth > 0 && turnedInkHeight > 0) {
+        result.diagonal = Qt.rect(Number(turned[3]) / turnedWidth, Number(turned[4]) / turnedHeight,
+          turnedInkWidth / turnedWidth, turnedInkHeight / turnedHeight)
+        result.diagonalWidth = turnedWidth
+        result.diagonalHeight = turnedHeight
       }
     }
     return result
