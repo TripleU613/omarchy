@@ -21,8 +21,11 @@ Item {
   readonly property int renderedFontSize: Math.max(1, Math.round(fontSize))
   readonly property real baseInkWidth: Math.max(1, baseMetrics.tightBoundingRect.width)
   readonly property real baseInkHeight: Math.max(1, baseMetrics.tightBoundingRect.height)
+  // Fitted to whichever axis of the item binds first, so a glyph in a canvas
+  // wider than it is tall comes out full height rather than squashed to the
+  // width of one square.
   readonly property real metricScale: normalize && width > 0 && height > 0
-    ? Math.min(width, height) / Math.max(baseInkWidth, baseInkHeight)
+    ? Math.min(width / baseInkWidth, height / baseInkHeight)
     : 1
   // Corrections the measured pixels asked for, on top of the metric estimate.
   property real pixelScale: 1
@@ -64,6 +67,18 @@ Item {
   property int inkRevision: 0
   // The closest pass so far, restored if later passes only overshoot.
   property var bestPass: null
+  // How wide the rendered ink is against its own height. The canvas is sized
+  // from this, and the font's own metrics disagree with what actually
+  // rasterizes, so it has to come from the same ink the rules are judged on.
+  //
+  // A render is grabbed at the size of this item, so ink hanging outside the
+  // canvas is cut off by the grab and a glyph that starts too wide measures
+  // exactly one canvas wide. The aspect therefore keeps being taken until the
+  // fit settles and the ink is inside, and is then frozen — otherwise a glyph
+  // whose aspect sits near the rounding line would swap between one square
+  // and two forever, each canvas making the other look right.
+  property real latchedAspect: 0
+  property bool aspectSettled: false
   property bool destroying: false
   readonly property var inkViolations: normalize ? IconRules.evaluate(inkCompass) : []
   // The lit box as fractions of this item: measured once the pixels are in,
@@ -122,6 +137,10 @@ Item {
         return
       }
 
+      if (!root.aspectSettled && result.rect.width > 0 && result.rect.height > 0) {
+        root.latchedAspect = (result.rect.width * root.width) / (result.rect.height * root.height)
+      }
+
       var compass = IconRules.compass(result, root.width, root.height)
       var pass = { pixelScale: root.pixelScale, pixelOffsetX: root.pixelOffsetX, pixelOffsetY: root.pixelOffsetY,
         measurement: result, compass: compass }
@@ -141,6 +160,7 @@ Item {
       if (reached >= best - 0.01 || root.inkPasses >= IconRules.maxPasses) {
         root.applyPass(root.bestPass)
         root.inkVerified = true
+        root.aspectSettled = true
         InkCache.set(key, root.bestPass)
         return
       }
@@ -151,8 +171,7 @@ Item {
       // top-heavy or bottom-heavy glyph comes out level with its neighbours
       // rather than merely boxed like them.
       var r = result.rect
-      var extent = Math.max(r.width * root.width, r.height * root.height)
-      if (extent > 0) root.pixelScale *= Math.min(root.width, root.height) / extent
+      if (r.width > 0 && r.height > 0) root.pixelScale *= Math.min(1 / r.width, 1 / r.height)
       var shift = IconRules.balanceShift(r, result.centroid, IconRules.balanceAllowance(Math.min(root.width, root.height)))
       root.pixelOffsetX += shift.x * root.width
       root.pixelOffsetY += shift.y * root.height
@@ -160,9 +179,9 @@ Item {
     })
   }
 
-  onTextChanged: requestInk()
-  onFontFamilyChanged: requestInk()
-  onRenderedFontSizeChanged: requestInk()
+  onTextChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
+  onFontFamilyChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
+  onRenderedFontSizeChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
   onWidthChanged: requestInk()
   onHeightChanged: requestInk()
   onNormalizeChanged: requestInk()

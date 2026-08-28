@@ -135,6 +135,54 @@ ShellRoot {
     return true
   }
 
+  function checkGrid() {
+    // A square mark takes one square of the grid.
+    if (vector.iconSquares !== 1 || vector.opticalWidth !== vector.opticalSize) {
+      fail("a square icon does not take one square: " + vector.iconSquares + " " + vector.opticalWidth)
+      return false
+    }
+    // A two-to-one mark takes two, so it can stay full height instead of
+    // being shrunk until its width fits one square.
+    if (twoTone.iconSquares !== 2 || Math.abs(twoTone.opticalWidth - twoTone.opticalSize * 2) > 0.001) {
+      fail("a 2:1 icon does not take two squares: " + twoTone.iconSquares + " " + twoTone.opticalWidth)
+      return false
+    }
+    var grown = twoTone.implicitWidth - vector.implicitWidth
+    if (Math.abs(grown - twoTone.opticalSize) > 0.001) {
+      fail("a two-square icon's slot does not grow by one square: " + grown)
+      return false
+    }
+    // Full height is the whole point: its ink must reach the canvas top and
+    // bottom, not sit at half the height of everything beside it.
+    var margins = twoTone.inkCompass
+    if (!margins || Math.max(margins.n, margins.s) > IconRules.slack(margins)) {
+      fail("a two-square icon is not full height: " + JSON.stringify(margins))
+      return false
+    }
+    if (IconRules.squares(1.1) !== 1 || IconRules.squares(1.25) !== 1) {
+      fail("a nearly square icon is handed a second square")
+      return false
+    }
+    if (IconRules.squares(2.0) !== 2 || IconRules.squares(2.15) !== 2) {
+      fail("a cleanly two-square icon is not given the room it needs")
+      return false
+    }
+    // Room an icon cannot reach the far side of is worse than none: it would
+    // sit in a wider slot under a wider mark, still no taller than before.
+    if (IconRules.squares(1.5) !== 1 || IconRules.squares(1.67) !== 1) {
+      fail("an awkward in-between icon was handed a square it cannot fill")
+      return false
+    }
+    // Taller than wide takes one square; so does anything past the end of the
+    // grid, which falls back to being fitted by its width exactly as before.
+    if (IconRules.squares(0.5) !== 1 || IconRules.squares(3.05) !== IconRules.maxSquares
+        || IconRules.squares(99) !== 1) {
+      fail("the grid is not bounded at both ends")
+      return false
+    }
+    return true
+  }
+
   function checkRuleTable() {
     var same = function(a, b) { return JSON.stringify(a) === JSON.stringify(b) }
     if (!same(IconRules.evaluate(null), ["unmeasured"])) return fail("rules accept a missing measurement"), false
@@ -193,6 +241,7 @@ ShellRoot {
   function runChecks() {
     if (!checkRuleTable()) return
     if (!checkTwoTone()) return
+    if (!checkGrid()) return
     if (!checkSplit("󰂯", "󰂯", "", true)) return
     if (!checkSplit("󰄀 4", "󰄀", "4", true)) return
     if (!checkSplit("21% 󰁹", "󰁹", "21%", false)) return

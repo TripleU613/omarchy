@@ -43,9 +43,9 @@ Item {
   // is left as drawn; a sliver of one faded against the rest of its own icon
   // is an accident and is brought back to full.
   property bool flattenIcon: true
-  // The canvas an icon's ink fills. One size for every button, whatever font
-  // size its label happens to use; a component meant to read smaller (the
-  // status indicators) declares its own.
+  // One square of the icon grid: the canvas an icon's ink is fitted to. One
+  // size for every button, whatever font size its label happens to use; a
+  // component meant to read smaller (the status indicators) declares its own.
   property real opticalSize: Style.bar.iconCanvas
   property bool debugOpticalBounds: Quickshell.env("OMARCHY_DEBUG_BAR_ICONS") === "1"
   property bool hasVisualContent: text !== "" || iconComponent !== null
@@ -111,6 +111,30 @@ Item {
   readonly property real glyphBaselineY: glyph.visible ? glyph.baselineY : 0
   readonly property int glyphFontSize: glyph.visible ? glyph.renderedFontSize : 0
   readonly property real glyphScale: glyph.visible ? glyph.normalizedScale : 1
+  // How wide the mark is against its own height, held from the first
+  // measurement of the ink itself. The font's metrics are only the opening
+  // guess: they disagree with what actually rasterizes, and it is the
+  // rasterized ink the rules judge, so a glyph the font calls square can
+  // still render half the height of the row. Held, so widening the canvas
+  // below cannot feed back into it.
+  readonly property real iconAspect: {
+    if (iconComponent !== null) return iconFit.latchedAspect
+    if (!hasIconGlyph) return 1
+    if (glyph.latchedAspect > 0) return glyph.latchedAspect
+    var r = iconMetrics.tightBoundingRect
+    return r.width > 0 && r.height > 0 ? r.width / r.height : 1
+  }
+  // Squares are added along the bar: across a horizontal bar, down a vertical
+  // one, so a wide mark never pushes a narrow bar wider.
+  readonly property int iconSquares: hasIcon
+    ? IconRules.squares(vertical ? 1 / Math.max(0.0001, iconAspect) : iconAspect)
+    : 1
+  readonly property real opticalWidth: opticalSize * (vertical ? 1 : iconSquares)
+  readonly property real opticalHeight: opticalSize * (vertical ? iconSquares : 1)
+  // What the extra squares add to the slot, so the padding around a two-square
+  // icon matches the padding around a one-square one.
+  readonly property real slotGrowth: (vertical ? opticalHeight : opticalWidth) - opticalSize
+
   readonly property bool iconInkMeasured: iconFit.measured
   // How many distinct frames an icon component has shown; more than one
   // means an animation, judged by the union of its frames.
@@ -149,12 +173,20 @@ Item {
   visible: hasVisualContent || keepSpace
   opacity: !hasVisualContent || concealed ? 0 : (dimmed ? 0.45 : 1)
   implicitWidth: fixedWidth > 0 ? fixedWidth
-    : (vertical ? barSize : (iconOnly ? Style.bar.iconSlot : Math.max(12, content.implicitWidth + scaledHorizontalMargin * 2)))
+    : (vertical ? barSize : (iconOnly ? Style.bar.iconSlot + slotGrowth : Math.max(12, content.implicitWidth + scaledHorizontalMargin * 2)))
   implicitHeight: fixedHeight > 0 ? fixedHeight
-    : (vertical ? (iconOnly ? Style.bar.iconSlot : Math.max(12, content.implicitHeight + scaledVerticalPadding * 2)) : barSize)
+    : (vertical ? (iconOnly ? Style.bar.iconSlot + slotGrowth : Math.max(12, content.implicitHeight + scaledVerticalPadding * 2)) : barSize)
 
   Behavior on opacity {
     NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+  }
+
+  // The icon glyph at its base size, for the aspect the grid is derived from.
+  TextMetrics {
+    id: iconMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Math.max(1, Math.round(root.fontSize))
+    text: root.iconText
   }
 
   // The label's own space glyph sets the gap between icon and text.
@@ -177,8 +209,8 @@ Item {
       id: opticalCanvas
       anchors.verticalCenter: parent.verticalCenter
       visible: root.iconComponent !== null || (root.hasIconGlyph && root.labelVisible)
-      width: root.opticalSize
-      height: root.opticalSize
+      width: root.opticalWidth
+      height: root.opticalHeight
 
       OpticalGlyph {
         id: glyph
@@ -208,6 +240,12 @@ Item {
 
         property rect inkRect: Qt.rect(0, 0, 1, 1)
         property point inkCentroid: Qt.point(0.5, 0.5)
+        // The canvas is sized from this, and a render is grabbed at the size
+        // of the canvas, so an icon drawn larger than its canvas is cut off by
+        // the grab and measures exactly one canvas wide. It keeps being taken
+        // until the fit has been verified once, then freezes.
+        property real latchedAspect: 1
+        property bool aspectSettled: false
         property bool measured: false
         property var measuredBoxes: ({})
         property var measuredCentroids: ({})
@@ -225,7 +263,7 @@ Item {
         property var shownCompasses: ({})
         readonly property int frameCount: Object.keys(shownBoxes).length
         readonly property real fitScale: inkRect.width > 0 && inkRect.height > 0
-          ? Math.min(width, height) / Math.max(inkRect.width * width, inkRect.height * height)
+          ? Math.min(1 / inkRect.width, 1 / inkRect.height)
           : 1
         // Where the ink lands once the fit has scaled it about the center,
         // and the shift from there that brings its weight onto the canvas
@@ -324,6 +362,8 @@ Item {
           if (root.destroying) return
           measuredBoxes = {}
           measuredCentroids = {}
+          latchedAspect = 1
+          aspectSettled = false
           shownBoxes = {}
           shownCompasses = {}
           measured = false
@@ -402,6 +442,20 @@ Item {
           Qt.callLater(measure)
         }
 
+        // Boxes are cached against what the icon is showing, not how big its
+        // canvas is, so a canvas that grows a square has to throw them away
+        // and look again. The latched aspect is kept: it is what sized the
+        // canvas, and re-reading it here is how it would chase its own tail.
+        function remeasureForSize() {
+          if (root.destroying) return
+          measuredBoxes = {}
+          measuredCentroids = {}
+          requestMeasure()
+        }
+
+        onWidthChanged: remeasureForSize()
+        onHeightChanged: remeasureForSize()
+
         function measure() {
           if (root.destroying || !iconLoader.item || !root.hostWindow || width <= 0 || height <= 0) return
           if (!imagesSettled()) return
@@ -428,6 +482,9 @@ Item {
             iconFit.measuredCentroids = centroids
             iconFit.inkRect = iconFit.unionBox()
             iconFit.inkCentroid = iconFit.meanCentroid(centroids)
+            if (!iconFit.aspectSettled && result.rect.width > 0 && result.rect.height > 0) {
+              iconFit.latchedAspect = (result.rect.width * iconFit.width) / (result.rect.height * iconFit.height)
+            }
             iconFit.measured = true
             iconFit.requestVerify()
             if (requested !== iconFit.revision) Qt.callLater(iconFit.measure)
@@ -459,6 +516,7 @@ Item {
             iconFit.shownRect = iconFit.unionOf(iconFit.shownBoxes)
             iconFit.compass = iconFit.closestCompass(iconFit.shownCompasses)
             iconFit.verified = true
+            iconFit.aspectSettled = true
           })
         }
 
