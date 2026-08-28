@@ -10,6 +10,8 @@ WidgetButton {
   property real slotSize: Style.bar.iconSlot
 
   fontSize: Style.bar.iconFont
-  fixedWidth: vertical ? -1 : slotSize
-  fixedHeight: vertical ? slotSize : -1
+  // A mark wide enough to take more than one square of the grid takes the
+  // matching room in the bar, so its padding matches every other icon's.
+  fixedWidth: vertical ? -1 : slotSize + slotGrowth
+  fixedHeight: vertical ? slotSize + slotGrowth : -1
 }

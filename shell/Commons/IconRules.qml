@@ -48,6 +48,32 @@ QtObject {
   // pass seen is kept.
   readonly property int maxPasses: 5
 
+  // How many squares of the grid an icon takes along the bar. An icon is
+  // fitted inside that many squares by one square's height, so a mark that is
+  // genuinely wider than it is tall gets the room to stay full height instead
+  // of being shrunk until its width fits one square — which is what leaves a
+  // two-to-one badge reading half the height of everything beside it.
+  //
+  // Rounding to nearest is what keeps the extra squares to the marks that
+  // really are wide. Rounding up would hand a second square to a 1.1:1 icon
+  // and most of the row would be two squares wide, which is no grid at all.
+  // A mark only gets the extra room if it actually fills it. An awkward
+  // in-between shape — half again as wide as it is tall — would be handed a
+  // second square it cannot reach the far side of, and would sit in a wider
+  // slot under a wider mark still no taller than before. So the extra squares
+  // go to marks that are cleanly that many squares wide, and everything else
+  // stays in one, exactly as it was — including anything past the end of the
+  // grid, which cannot cleanly fill the cap either and so keeps being fitted
+  // by its width.
+  readonly property int maxSquares: 3
+  readonly property real squareFit: 0.25
+  function squares(aspect) {
+    if (!(aspect > 0)) return 1
+    var whole = Math.min(maxSquares, Math.round(aspect))
+    if (whole <= 1) return 1
+    return Math.abs(aspect - whole) <= squareFit ? whole : 1
+  }
+
   // How much of a mark a second tone has to cover before it counts as the
   // logo being drawn in two tones rather than one part of it being faded by
   // accident. Below this the faded part is brought back to full; at or above
