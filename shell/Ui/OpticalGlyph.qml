@@ -42,10 +42,19 @@ Item {
     ? probeInk.heightRatio : baseInkHeight / renderedFontSize
 
   // Sized so the mark's ink fills the block across the bar.
-  readonly property real metricScale: normalize && width > 0 && height > 0
+  readonly property real rawMetricScale: normalize && width > 0 && height > 0
     ? (fillHeight
         ? (height / Math.max(0.0001, inkHeightRatio)) / renderedFontSize
         : (width / Math.max(0.0001, inkWidthRatio)) / renderedFontSize)
+    : 1
+  // However the measurement came out, a glyph is never drawn far larger than
+  // the canvas that has to hold it. Belt and braces: the band above should
+  // already have caught anything this would clamp.
+  readonly property real metricScaleCeiling: normalize && renderedFontSize > 0
+    ? (2.5 * Math.max(width, height)) / renderedFontSize
+    : 1
+  readonly property real metricScale: normalize
+    ? Math.min(rawMetricScale, metricScaleCeiling)
     : 1
   // A mark wider than the block is condensed toward square rather than shrunk,
   // so it keeps the row's height instead of reading half of it.
@@ -140,6 +149,13 @@ Item {
       var h = result.rect.height * probeItem.height
       if (!(w > 0) || !(h > 0)) return
       var ink = { aspect: w / h, widthRatio: w / root.probePixelSize, heightRatio: h / root.probePixelSize }
+      // A glyph's ink cannot be a sliver of the size it was drawn at, nor much
+      // bigger than it. A measurement outside that band is a failed one, and
+      // trusting it scales the glyph by the reciprocal of a near-zero number —
+      // which is how one indicator ended up ballooning out of the bar. The
+      // font's own metrics are the fallback; they are rough but never absurd.
+      if (!(ink.heightRatio > 0.15 && ink.heightRatio < 2)
+          || !(ink.widthRatio > 0.05 && ink.widthRatio < 4)) return
       InkCache.set(key, ink)
       root.probeInk = ink
     })

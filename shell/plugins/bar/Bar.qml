@@ -156,6 +156,14 @@ Item {
         label: button ? (item.hasIconGlyph ? item.iconText : item.text) : String(item.source),
         shown: item.visible && item.opacity > 0,
         canvas: button ? item.opticalSize : item.width,
+        // What the icon actually paints, next to the canvas meant to hold it.
+        // A painted size far larger than its canvas is the signature of a
+        // measurement that went wrong, and says so plainly instead of leaving
+        // it to be guessed at from a screenshot.
+        painted: button && item.hasIconGlyph
+          ? Math.round(item.glyphPaintedWidth * 10) / 10 + "x" + Math.round(item.glyphPaintedHeight * 10) / 10
+          : null,
+        squash: button ? Math.round((item.iconSquash || 1) * 100) / 100 : null,
         verified: item.inkVerified,
         compass: item.inkCompass,
         violations: item.inkViolations
