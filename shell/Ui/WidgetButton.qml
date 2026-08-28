@@ -117,23 +117,18 @@ Item {
   // rasterized ink the rules judge, so a glyph the font calls square can
   // still render half the height of the row. Held, so widening the canvas
   // below cannot feed back into it.
-  readonly property real iconAspect: {
-    if (iconComponent !== null) return iconFit.latchedAspect
-    if (!hasIconGlyph) return 1
-    if (glyph.latchedAspect > 0) return glyph.latchedAspect
-    var r = iconMetrics.tightBoundingRect
-    return r.width > 0 && r.height > 0 ? r.width / r.height : 1
-  }
-  // Squares are added along the bar: across a horizontal bar, down a vertical
-  // one, so a wide mark never pushes a narrow bar wider.
-  readonly property int iconSquares: hasIcon
-    ? IconRules.squares(vertical ? 1 / Math.max(0.0001, iconAspect) : iconAspect)
-    : 1
-  readonly property real opticalWidth: opticalSize * (vertical ? 1 : iconSquares)
-  readonly property real opticalHeight: opticalSize * (vertical ? iconSquares : 1)
-  // What the extra squares add to the slot, so the padding around a two-square
-  // icon matches the padding around a one-square one.
-  readonly property real slotGrowth: (vertical ? opticalHeight : opticalWidth) - opticalSize
+  readonly property real iconAspect: iconComponent !== null
+    ? iconFit.fitAspect
+    : (hasIconGlyph ? glyph.naturalAspect : 1)
+  // How far the mark ended up condensed; 1 is untouched.
+  readonly property real iconSquash: iconComponent !== null
+    ? iconFit.fitSquash
+    : (hasIconGlyph ? glyph.squashX : 1)
+  // Every icon keeps one slot: a wide mark is condensed into its canvas
+  // rather than handed more of the bar.
+  readonly property real opticalWidth: vertical ? opticalSize : opticalSize * IconRules.maxAspect
+  readonly property real opticalHeight: vertical ? opticalSize * IconRules.maxAspect : opticalSize
+  readonly property real slotGrowth: 0
 
   readonly property bool iconInkMeasured: iconFit.measured
   // How many distinct frames an icon component has shown; more than one
@@ -220,6 +215,7 @@ Item {
         fontFamily: root.fontFamily
         fontSize: root.fontSize
         normalize: true
+        fillHeight: !root.vertical
         color: root.contentColor
         debugBounds: root.debugOpticalBounds
 
@@ -240,12 +236,6 @@ Item {
 
         property rect inkRect: Qt.rect(0, 0, 1, 1)
         property point inkCentroid: Qt.point(0.5, 0.5)
-        // The canvas is sized from this, and a render is grabbed at the size
-        // of the canvas, so an icon drawn larger than its canvas is cut off by
-        // the grab and measures exactly one canvas wide. It keeps being taken
-        // until the fit has been verified once, then freezes.
-        property real latchedAspect: 1
-        property bool aspectSettled: false
         property bool measured: false
         property var measuredBoxes: ({})
         property var measuredCentroids: ({})
@@ -262,26 +252,46 @@ Item {
         property var shownBoxes: ({})
         property var shownCompasses: ({})
         readonly property int frameCount: Object.keys(shownBoxes).length
+        // Filled across the bar, then condensed along it if the mark is wider
+        // than a block, so it keeps the row's height rather than shrinking out
+        // of line with it.
+        // Drawn icons keep the fit they have always had: scaled evenly until
+        // the ink meets whichever edge it reaches first. Filling the block the
+        // way a glyph now does needs a measurement that can be trusted the
+        // moment it arrives, and a component that is still drawing itself
+        // reports ink far smaller than it will end up — which scales the whole
+        // thing up enormously. Glyphs are measured once, on their own, so they
+        // do not have that problem.
         readonly property real fitScale: inkRect.width > 0 && inkRect.height > 0
           ? Math.min(1 / inkRect.width, 1 / inkRect.height)
           : 1
+        readonly property real fitAspect: inkRect.width > 0 && inkRect.height > 0
+          ? (inkRect.width * width) / (inkRect.height * height)
+          : 1
+        readonly property real fitSquash: 1
+        readonly property real fitScaleX: fitScale
+        readonly property real fitScaleY: fitScale
         // Where the ink lands once the fit has scaled it about the center,
         // and the shift from there that brings its weight onto the canvas
         // center. Scaling answers how far the icon reaches; the shift answers
         // where it weighs, so an icon with its mass off to one side comes out
         // level with the rest of the row instead of merely boxed like it.
-        readonly property rect fittedRect: Qt.rect(0.5 + (inkRect.x - 0.5) * fitScale,
-          0.5 + (inkRect.y - 0.5) * fitScale, inkRect.width * fitScale, inkRect.height * fitScale)
-        readonly property point fittedCentroid: Qt.point(0.5 + (inkCentroid.x - 0.5) * fitScale,
-          0.5 + (inkCentroid.y - 0.5) * fitScale)
+        readonly property rect fittedRect: Qt.rect(0.5 + (inkRect.x - 0.5) * fitScaleX,
+          0.5 + (inkRect.y - 0.5) * fitScaleY, inkRect.width * fitScaleX, inkRect.height * fitScaleY)
+        readonly property point fittedCentroid: Qt.point(0.5 + (inkCentroid.x - 0.5) * fitScaleX,
+          0.5 + (inkCentroid.y - 0.5) * fitScaleY)
         readonly property point fitShift: IconRules.balanceShift(fittedRect, fittedCentroid,
-          IconRules.balanceAllowance(Math.min(width, height)))
+          IconRules.balanceAllowance(Math.min(width, height)), root.vertical ? "x" : "y")
 
         visible: root.iconComponent !== null
         width: parent.width
         height: parent.height
-        scale: fitScale
-        transformOrigin: Item.Center
+        transform: Scale {
+          origin.x: iconFit.width / 2
+          origin.y: iconFit.height / 2
+          xScale: iconFit.fitScaleX
+          yScale: iconFit.fitScaleY
+        }
         x: fitShift.x * width
         y: fitShift.y * height
 
@@ -362,8 +372,6 @@ Item {
           if (root.destroying) return
           measuredBoxes = {}
           measuredCentroids = {}
-          latchedAspect = 1
-          aspectSettled = false
           shownBoxes = {}
           shownCompasses = {}
           measured = false
@@ -482,9 +490,6 @@ Item {
             iconFit.measuredCentroids = centroids
             iconFit.inkRect = iconFit.unionBox()
             iconFit.inkCentroid = iconFit.meanCentroid(centroids)
-            if (!iconFit.aspectSettled && result.rect.width > 0 && result.rect.height > 0) {
-              iconFit.latchedAspect = (result.rect.width * iconFit.width) / (result.rect.height * iconFit.height)
-            }
             iconFit.measured = true
             iconFit.requestVerify()
             if (requested !== iconFit.revision) Qt.callLater(iconFit.measure)
@@ -510,13 +515,12 @@ Item {
               boxes[frame] = result.rect
               iconFit.shownBoxes = boxes
               var compasses = iconFit.shownCompasses
-              compasses[frame] = IconRules.compass(result, opticalCanvas.width, opticalCanvas.height)
+              compasses[frame] = IconRules.compass(result, opticalCanvas.width, opticalCanvas.height, root.vertical)
               iconFit.shownCompasses = compasses
             }
             iconFit.shownRect = iconFit.unionOf(iconFit.shownBoxes)
             iconFit.compass = iconFit.closestCompass(iconFit.shownCompasses)
             iconFit.verified = true
-            iconFit.aspectSettled = true
           })
         }
 

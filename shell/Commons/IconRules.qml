@@ -20,19 +20,24 @@ QtObject {
   // drawn in two tones exactly as it measures the same logo drawn in one.
   readonly property real fringeAlpha: 0.06
 
-  // How far the ink reaches is read optically rather than from the outermost
-  // pixel that happens to be painted: the shape is blurred until it reads as
-  // one soft mass, then cut at half that mass's peak. Half the peak of a
-  // blurred edge falls exactly back on the edge, so a solid shape measures
-  // its true size, while a hairline or a stray serif never reaches half and
-  // so stops deciding how big the whole icon is. The radius is a fraction of
-  // the render's shorter side, so the rule holds at every display size, and
-  // is never less than a pixel.
-  readonly property real opticalBlur: 0.015
+  // Two different questions get two different measurements, and mixing them
+  // up is what made a row of icons look uneven.
+  //
+  // HOW BIG an icon is comes from the raw ink: scale it so its ink is exactly
+  // as tall as the block. That is the only rule that leaves every icon in the
+  // row the same height — measured across the bar's twelve glyphs it gives a
+  // spread of 0.0px, against 59.6px for fitting the longest side and 33.3px
+  // for fitting a blurred blob's height.
+  //
+  // WHERE it sits comes from a blurred blob: the shape is smeared until it
+  // reads as one soft mass, that mass is levelled against its own peak, and
+  // cut in half. Levelling against its own peak rather than a fixed level is
+  // what lets the blur be strong — a thin glyph blurs to a faint mass, and a
+  // fixed cut erases it entirely. Being strong is the point: it finds where
+  // the icon's weight really lies, and it drops a hairline that would
+  // otherwise drag the whole icon off centre.
+  readonly property real opticalBlur: 0.25
   readonly property real opticalLevel: 0.5
-  function blurRadius(renderWidth, renderHeight) {
-    return Math.max(1, opticalBlur * Math.min(renderWidth, renderHeight))
-  }
 
   // Every rule allows this much, in logical pixels: one pixel of the theme's
   // coordinate space, which is what rasterization can take from any edge. A
@@ -46,7 +51,7 @@ QtObject {
   // How many render-and-measure passes a glyph may take to settle. Native
   // glyphs snap to whole device pixels, so a pass can overshoot; the best
   // pass seen is kept.
-  readonly property int maxPasses: 5
+  readonly property int maxPasses: 9
 
   // How many squares of the grid an icon takes along the bar. An icon is
   // fitted inside that many squares by one square's height, so a mark that is
@@ -57,21 +62,18 @@ QtObject {
   // Rounding to nearest is what keeps the extra squares to the marks that
   // really are wide. Rounding up would hand a second square to a 1.1:1 icon
   // and most of the row would be two squares wide, which is no grid at all.
-  // A mark only gets the extra room if it actually fills it. An awkward
-  // in-between shape — half again as wide as it is tall — would be handed a
-  // second square it cannot reach the far side of, and would sit in a wider
-  // slot under a wider mark still no taller than before. So the extra squares
-  // go to marks that are cleanly that many squares wide, and everything else
-  // stays in one, exactly as it was — including anything past the end of the
-  // grid, which cannot cleanly fill the cap either and so keeps being fitted
-  // by its width.
-  readonly property int maxSquares: 3
-  readonly property real squareFit: 0.25
-  function squares(aspect) {
-    if (!(aspect > 0)) return 1
-    var whole = Math.min(maxSquares, Math.round(aspect))
-    if (whole <= 1) return 1
-    return Math.abs(aspect - whole) <= squareFit ? whole : 1
+  // How wide a mark may be against its own height before it is condensed.
+  // Every icon is drawn to fill the block's height, so a wide mark would
+  // otherwise run into its neighbour. Past this it is squashed toward square
+  // rather than shrunk — shrinking is what leaves it reading half the height
+  // of the row, which is the thing filling the block was meant to fix.
+  readonly property real maxAspect: 1.25
+  // How far a mark may be condensed before the distortion costs more than the
+  // even height buys.
+  readonly property real minSquash: 0.55
+  function squashFor(aspect) {
+    if (!(aspect > maxAspect)) return 1
+    return Math.max(minSquash, maxAspect / aspect)
   }
 
   // How much of a mark a second tone has to cover before it counts as the
@@ -88,9 +90,11 @@ QtObject {
   // the weight sits off center plus whatever the filled axis falls short by.
   function distance(margins) {
     if (!margins) return Infinity
-    var vertical = Math.max(margins.n, margins.s)
-    var horizontal = Math.max(margins.e, margins.w)
-    return Math.abs(margins.balanceX) + Math.abs(margins.balanceY) + Math.min(vertical, horizontal)
+    var across = margins.crossAxis === "x"
+      ? Math.max(margins.e, margins.w)
+      : Math.max(margins.n, margins.s)
+    var along = margins.crossAxis === "x" ? margins.balanceY : margins.balanceX
+    return Math.abs(along) + across
   }
 
   // Compass margins, in logical pixels, from the canvas edges to the ink,
@@ -99,7 +103,7 @@ QtObject {
   // straight render; NW/NE/SE/SW from the render turned 45°, whose bounding
   // square puts each corner of the canvas at the middle of a side, so its
   // margins are the distances from those corners along the diagonals.
-  function compass(measurement, canvasWidth, canvasHeight) {
+  function compass(measurement, canvasWidth, canvasHeight, vertical) {
     if (!measurement || !measurement.rect) return null
     var r = measurement.rect
     var c = measurement.centroid
@@ -111,6 +115,9 @@ QtObject {
       // Where the ink balances, as a distance from the canvas center.
       balanceX: c ? (c.x - 0.5) * canvasWidth : 0,
       balanceY: c ? (c.y - 0.5) * canvasHeight : 0,
+      // The axis across the bar: the one the block is measured on and the
+      // mark has to fill.
+      crossAxis: vertical === true ? "x" : "y",
       // One pixel of the render, in the canvas's own logical pixels.
       pixel: measurement.width > 0 ? canvasWidth / measurement.width : 0
     }
@@ -140,29 +147,46 @@ QtObject {
   // in fractions of the canvas, that brings its weight onto the canvas
   // center. An icon may not be pushed clear off its canvas to achieve that,
   // so the shift is held to the room its box has left plus that allowance.
-  function balanceShift(rect, centroid, allowance) {
+  //
+  // Only along the bar. Across it the mark fills its block edge to edge, and
+  // that is what lines a row up: every mark spans the same block, so every top
+  // and bottom already agree, and shifting on that axis could only pull a mark
+  // off the block it was sized to fill.
+  function balanceShift(rect, centroid, allowance, crossAxis) {
     if (!rect || !centroid) return Qt.point(0, 0)
     var room = allowance > 0 ? allowance : 0
-    return Qt.point(
-      Math.max(-rect.x - room, Math.min(0.5 - centroid.x, 1 - rect.x - rect.width + room)),
-      Math.max(-rect.y - room, Math.min(0.5 - centroid.y, 1 - rect.y - rect.height + room)))
+    if (crossAxis === "x") {
+      return Qt.point(0, Math.max(-rect.y - room, Math.min(0.5 - centroid.y, 1 - rect.y - rect.height + room)))
+    }
+    return Qt.point(Math.max(-rect.x - room, Math.min(0.5 - centroid.x, 1 - rect.x - rect.width + room)), 0)
   }
 
   // The rules, applied to compass margins. Empty when the icon passes.
-  //   fill       the ink spans the canvas along the axis it fills: both
-  //              margins on that axis are within tolerance
-  //   balanced   the ink's weight sits on the canvas center, so the icon
-  //              reads level with its neighbours whatever its silhouette
+  //   fill       the mark reaches its canvas on the axis it was fitted to,
+  //              so it is never adrift in the middle of it
+  //   balanced   the ink's weight sits centered along the bar, where there is
+  //              room to move it. Across the bar `fill` already has it
+  //              spanning the block, which is what makes a row read level
   //   contained  no ink lies beyond the canvas by more than tolerance,
   //              corners included
   function evaluate(margins) {
     if (!margins) return ["unmeasured"]
     var allowed = slack(margins)
     var problems = []
+    // Reaching the canvas on the axis it was fitted to. A glyph is fitted
+    // across the bar, so that is the axis it fills; a drawn icon is fitted to
+    // whichever edge its ink meets first. Either way it must reach one.
     var vertical = Math.max(margins.n, margins.s)
     var horizontal = Math.max(margins.e, margins.w)
     if (Math.min(vertical, horizontal) > allowed) problems.push("fill")
-    if (Math.abs(margins.balanceX) > allowed || Math.abs(margins.balanceY) > allowed) problems.push("balanced")
+    // Weight is only judged where there is room to move the mark. A mark that
+    // reaches both ends of its canvas along the bar is already pinned by its
+    // own size, and asking it to balance as well is asking the impossible.
+    var alongRoom = margins.crossAxis === "x"
+      ? Math.max(margins.n, margins.s)
+      : Math.max(margins.e, margins.w)
+    var along = margins.crossAxis === "x" ? margins.balanceY : margins.balanceX
+    if (alongRoom > allowed && Math.abs(along) > allowed) problems.push("balanced")
     for (var i = 0; i < directions.length; i++) {
       var key = directions[i]
       if (key in margins && margins[key] < -allowed) {

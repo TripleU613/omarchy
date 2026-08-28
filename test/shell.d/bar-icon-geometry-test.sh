@@ -36,12 +36,12 @@ ShellRoot {
   readonly property string outDir: Quickshell.env("TEST_TMP")
   property int pendingGrabs: 0
   readonly property var icons: [
-    bluetooth, network, audio, monitor, power, widgetGlyph, mixed, vector, imageIcon,
+    bluetooth, network, audio, monitor, power, wideGlyph, widgetGlyph, mixed, vector, imageIcon,
     twoTone, slivered,
     verticalIcon, compactStatusIcon, compactVerticalStatusIcon, horizontalIndicator, verticalIndicator
   ]
   readonly property var iconNames: [
-    "bluetooth", "network", "audio", "monitor", "power", "widgetGlyph", "mixed", "vector", "imageIcon",
+    "bluetooth", "network", "audio", "monitor", "power", "wideGlyph", "widgetGlyph", "mixed", "vector", "imageIcon",
     "twoTone", "slivered",
     "verticalIcon", "compactStatusIcon", "compactVerticalStatusIcon", "horizontalIndicator", "verticalIndicator"
   ]
@@ -72,12 +72,26 @@ ShellRoot {
     // level, which leaves the box itself off center by design. What must be
     // centered is the weight.
     var balance = icon.inkCompass
-    if (balance && (Math.abs(balance.balanceX) > IconRules.slack(balance)
-        || Math.abs(balance.balanceY) > IconRules.slack(balance))) {
-      fail(name + " weight sits off the canvas center by " + balance.balanceX + "," + balance.balanceY)
-      return false
+    if (balance) {
+      var along = balance.crossAxis === "x" ? balance.balanceY : balance.balanceX
+      if (Math.abs(along) > IconRules.slack(balance)) {
+        fail(name + " weight sits off center along the bar by " + along)
+        return false
+      }
+      // A glyph is fitted across the bar, so it has to reach its block there;
+      // a drawn icon is fitted to whichever edge it meets first.
+      if (icon.hasIconGlyph) {
+        var across = balance.crossAxis === "x"
+          ? Math.max(balance.e, balance.w)
+          : Math.max(balance.n, balance.s)
+        if (across > IconRules.slack(balance)) {
+          fail(name + " does not fill its block, short by " + across)
+          return false
+        }
+      }
     }
-    if (icon.glyphPaintedWidth > icon.opticalSize + 2 * IconRules.tolerance || icon.glyphPaintedHeight > icon.opticalSize + 2 * IconRules.tolerance) {
+    if (icon.glyphPaintedWidth > icon.opticalWidth + 2 * IconRules.tolerance
+        || icon.glyphPaintedHeight > icon.opticalHeight + 2 * IconRules.tolerance) {
       fail(name + " painted bounds overflow the optical canvas: " + icon.glyphPaintedWidth + "x" + icon.glyphPaintedHeight)
       return false
     }
@@ -135,49 +149,41 @@ ShellRoot {
     return true
   }
 
-  function checkGrid() {
-    // A square mark takes one square of the grid.
-    if (vector.iconSquares !== 1 || vector.opticalWidth !== vector.opticalSize) {
-      fail("a square icon does not take one square: " + vector.iconSquares + " " + vector.opticalWidth)
+  function checkSquash() {
+    // Every icon gets the same canvas, so the open-panel mark under one is the
+    // same length as under any other.
+    if (Math.abs(vector.opticalWidth - wideGlyph.opticalWidth) > 0.001
+        || Math.abs(vector.opticalHeight - wideGlyph.opticalHeight) > 0.001) {
+      fail("icons do not share one canvas: " + vector.opticalWidth + " vs " + wideGlyph.opticalWidth)
       return false
     }
-    // A two-to-one mark takes two, so it can stay full height instead of
-    // being shrunk until its width fits one square.
-    if (twoTone.iconSquares !== 2 || Math.abs(twoTone.opticalWidth - twoTone.opticalSize * 2) > 0.001) {
-      fail("a 2:1 icon does not take two squares: " + twoTone.iconSquares + " " + twoTone.opticalWidth)
+    // The point of the whole thing: a 2:1 mark still fills the block's height
+    // rather than being shrunk until its width fits and reading half the
+    // height of the row.
+    var wide = wideGlyph.inkCompass
+    if (!wide || Math.max(wide.n, wide.s) > IconRules.slack(wide)) {
+      fail("a wide glyph does not fill its block: " + JSON.stringify(wide))
       return false
     }
-    var grown = twoTone.implicitWidth - vector.implicitWidth
-    if (Math.abs(grown - twoTone.opticalSize) > 0.001) {
-      fail("a two-square icon's slot does not grow by one square: " + grown)
+    // It gets there by being condensed toward square, not by shrinking.
+    if (!(wideGlyph.iconSquash < 1)) {
+      fail("a wide glyph was not condensed: " + wideGlyph.iconSquash)
       return false
     }
-    // Full height is the whole point: its ink must reach the canvas top and
-    // bottom, not sit at half the height of everything beside it.
-    var margins = twoTone.inkCompass
-    if (!margins || Math.max(margins.n, margins.s) > IconRules.slack(margins)) {
-      fail("a two-square icon is not full height: " + JSON.stringify(margins))
+    if (bluetooth.iconSquash !== 1) {
+      fail("a narrow glyph was condensed: " + bluetooth.iconSquash)
       return false
     }
-    if (IconRules.squares(1.1) !== 1 || IconRules.squares(1.25) !== 1) {
-      fail("a nearly square icon is handed a second square")
+    if (IconRules.squashFor(1.0) !== 1 || IconRules.squashFor(IconRules.maxAspect) !== 1) {
+      fail("a mark inside the allowance was condensed anyway")
       return false
     }
-    if (IconRules.squares(2.0) !== 2 || IconRules.squares(2.15) !== 2) {
-      fail("a cleanly two-square icon is not given the room it needs")
+    if (Math.abs(IconRules.squashFor(2.0) - IconRules.maxAspect / 2.0) > 0.001) {
+      fail("a 2:1 mark is not condensed to the allowance")
       return false
     }
-    // Room an icon cannot reach the far side of is worse than none: it would
-    // sit in a wider slot under a wider mark, still no taller than before.
-    if (IconRules.squares(1.5) !== 1 || IconRules.squares(1.67) !== 1) {
-      fail("an awkward in-between icon was handed a square it cannot fill")
-      return false
-    }
-    // Taller than wide takes one square; so does anything past the end of the
-    // grid, which falls back to being fitted by its width exactly as before.
-    if (IconRules.squares(0.5) !== 1 || IconRules.squares(3.05) !== IconRules.maxSquares
-        || IconRules.squares(99) !== 1) {
-      fail("the grid is not bounded at both ends")
+    if (IconRules.squashFor(99) < IconRules.minSquash - 0.001) {
+      fail("condensing is not bounded")
       return false
     }
     return true
@@ -192,10 +198,17 @@ ShellRoot {
       return fail("rules miss an icon short of its canvas"), false
     // A box centered to the pixel still fails if the weight inside it is not:
     // that is the icon that reads high or low in an otherwise level row.
-    if (!same(IconRules.evaluate({ n: 1, s: 1, e: 0, w: 0, balanceX: 0, balanceY: -2.2 }), ["balanced"]))
+    if (!same(IconRules.evaluate({ n: 0, s: 0, e: 2, w: 2, balanceX: -2.2, balanceY: 0 }), ["balanced"]))
       return fail("rules miss an icon whose weight sits off center"), false
-    if (!same(IconRules.evaluate({ n: 0, s: 2, e: 0, w: 0.5, balanceX: 1.4, balanceY: 0 }), ["balanced"]))
+    if (!same(IconRules.evaluate({ n: 0, s: 0, e: 2, w: 2.5, balanceX: 1.4, balanceY: 0 }), ["balanced"]))
       return fail("rules miss an off-center icon"), false
+    // A mark reaching both ends of its canvas cannot be moved, so its weight
+    // is not held against it.
+    if (!same(IconRules.evaluate({ n: 0, s: 0, e: 0, w: 0, balanceX: 2.4, balanceY: 0 }), []))
+      return fail("rules fault a pinned icon for weight it cannot move"), false
+    // Across the bar, weight is never the question — filling the block is.
+    if (!same(IconRules.evaluate({ n: 0, s: 0, e: 2, w: 2, balanceX: 0, balanceY: -2.2 }), []))
+      return fail("rules fault an icon for where it weighs across the bar"), false
     if (IconRules.evaluate({ n: 0, s: 0, e: 0, w: 0, nw: -3, ne: 0, se: 0, sw: 0, balanceX: 0, balanceY: 0 }).indexOf("contained") === -1)
       return fail("rules miss ink spilling past a corner"), false
     // One measured pixel is the finest the rule can be held to, so a render
@@ -212,12 +225,12 @@ ShellRoot {
       return fail("compass does not report where the ink balances: " + JSON.stringify(compass)), false
     // Weight is brought onto the center only as far as the box has room, and
     // never on the axis the icon already fills.
-    var shift = IconRules.balanceShift(Qt.rect(0, 0.2, 1, 0.6), Qt.point(0.5, 0.65))
-    if (Math.abs(shift.x) > 0.001 || Math.abs(shift.y + 0.15) > 0.001)
+    var shift = IconRules.balanceShift(Qt.rect(0.2, 0, 0.6, 1), Qt.point(0.65, 0.5), 0, "y")
+    if (Math.abs(shift.x + 0.15) > 0.001 || Math.abs(shift.y) > 0.001)
       return fail("balance shift does not center the weight: " + JSON.stringify(shift)), false
-    var pinned = IconRules.balanceShift(Qt.rect(0, 0, 1, 1), Qt.point(0.3, 0.7))
+    var pinned = IconRules.balanceShift(Qt.rect(0, 0, 1, 1), Qt.point(0.3, 0.7), 0, "y")
     if (Math.abs(pinned.x) > 0.001 || Math.abs(pinned.y) > 0.001)
-      return fail("balance shift pushes a filled icon off its canvas: " + JSON.stringify(pinned)), false
+      return fail("balance shift pushes an icon off the room it has: " + JSON.stringify(pinned)), false
     return true
   }
 
@@ -241,7 +254,7 @@ ShellRoot {
   function runChecks() {
     if (!checkRuleTable()) return
     if (!checkTwoTone()) return
-    if (!checkGrid()) return
+    if (!checkSquash()) return
     if (!checkSplit("󰂯", "󰂯", "", true)) return
     if (!checkSplit("󰄀 4", "󰄀", "4", true)) return
     if (!checkSplit("21% 󰁹", "󰁹", "21%", false)) return
@@ -409,6 +422,7 @@ ShellRoot {
       BarIconButton { id: audio; bar: testBar; text: "󰖁" }
       BarIconButton { id: monitor; bar: testBar; text: "󰍹" }
       BarIconButton { id: power; bar: testBar; text: "󰁹" }
+      BarIconButton { id: wideGlyph; bar: testBar; text: String.fromCodePoint(0xF08AE) }
       BarIconButton {
         id: vector
         bar: testBar
