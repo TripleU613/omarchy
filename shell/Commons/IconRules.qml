@@ -51,7 +51,7 @@ QtObject {
   // How many render-and-measure passes a glyph may take to settle. Native
   // glyphs snap to whole device pixels, so a pass can overshoot; the best
   // pass seen is kept.
-  readonly property int maxPasses: 9
+  readonly property int maxPasses: 5
 
   // How many squares of the grid an icon takes along the bar. An icon is
   // fitted inside that many squares by one square's height, so a mark that is

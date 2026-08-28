@@ -28,7 +28,10 @@ Item {
   // quietly do nothing at all. Measured here, nothing can be cut off and
   // nothing depends on the canvas, so the size to render at and how far to
   // condense are arithmetic rather than a hunt. Cached per glyph and family.
-  readonly property int probePixelSize: 64
+  // Kept small on purpose: this is one render per distinct glyph at shell
+  // start, and every pixel of it is time the bar is not up yet. It only has
+  // to be big enough to measure ratios, not to look at.
+  readonly property int probePixelSize: 40
   property var probeInk: null
   readonly property real naturalAspect: probeInk && probeInk.aspect > 0
     ? probeInk.aspect : baseInkWidth / baseInkHeight
@@ -139,7 +142,7 @@ Item {
       probeInk = cached
       return
     }
-    var side = Math.max(1, Math.round(probeItem.width * 2))
+    var side = Math.max(1, Math.round(probeItem.width))
     probeMeasure.measure(probeItem, Qt.size(side, side), function(result) {
       if (!root || root.destroying || !result || !result.rect) return
       var w = result.rect.width * probeItem.width
@@ -261,8 +264,8 @@ Item {
   Item {
     id: probeItem
     visible: false
-    width: root.probePixelSize * 3
-    height: root.probePixelSize * 3
+    width: root.probePixelSize * 2
+    height: root.probePixelSize * 2
 
     Text {
       anchors.centerIn: parent
