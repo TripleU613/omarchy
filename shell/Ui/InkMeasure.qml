@@ -34,7 +34,8 @@ Item {
   Component.onDestruction: destroying = true
 
   // Renders `target` at `pixelSize` and calls done(result) with
-  //   rect            ink box as fractions of the render
+  //   rect            raw ink box as fractions of the render: how big
+  //   blob            blurred mass box, or null: where the weight lies
   //   centroid        where the ink balances, as fractions of the render
   //   width, height   render size in pixels
   //   diagonal        ink box of the render turned 45°, as fractions of that
@@ -70,15 +71,29 @@ Item {
       // the icon was painted; the alpha's own peak is kept from before that,
       // to tell a faint mark from an empty render. The two ramps weigh the
       // shape against a gradient across each axis, which is where it balances.
+      // The blur is taken against the mark, not the frame it was rendered in,
+      // so the same mark measures the same however much empty space surrounds
+      // it. The raw box is reported alongside the blurred one: size comes from
+      // the raw ink, position from the blurred mass.
       inspector.command = ["bash", "-c",
-        'magick "$1" -alpha extract -set option:peak "%[fx:maxima]" -threshold "$3" -blur 0x"$2" -threshold "$4" -write mpr:mask'
+        'ink=$(magick "$1" -alpha extract -threshold "$2" -format "%@" info: 2>/dev/null)\n'
+          + 'w=${ink%%x*}; rest=${ink#*x}; h=${rest%%+*}\n'
+          + 'case $w in ""|*[!0-9]*) w=0 ;; esac; case $h in ""|*[!0-9]*) h=0 ;; esac\n'
+          + 'if [ "$w" -lt 1 ] || [ "$h" -lt 1 ]; then s=1; else\n'
+          + '  m=$w; [ "$h" -lt "$m" ] && m=$h\n'
+          + '  s=$(awk -v m="$m" -v f="$3" \'BEGIN { v = f * m; if (v < 1) v = 1; print v }\')\n'
+          + 'fi\n'
+          + 'magick "$1" -alpha extract -set option:peak "%[fx:maxima]" -threshold "$2"'
+          + ' -blur 0x"$s" -auto-level -threshold "$4" -write mpr:mask'
           + ' \\( +clone -sparse-color barycentric "0,0 black %[fx:w-1],0 white" \\) -compose multiply -composite -format "%[fx:mean] " -write info: +delete'
           + ' mpr:mask \\( +clone -sparse-color barycentric "0,0 black 0,%[fx:h-1] white" \\) -compose multiply -composite -format "%[fx:mean] " -write info: +delete'
           + ' mpr:mask \\( +clone -background black -rotate 45 -format "%w %h %@ " -write info: +delete \\)'
-          + ' -format "%w %h %@ %[fx:mean] %[peak]\\n" info:; rm -f -- "$1"',
+          + ' -format "%w %h %@ %[fx:mean] %[peak] " info:\n'
+          + 'printf "%s\\n" "$ink"\n'
+          + 'rm -f -- "$1"',
         "omarchy-shell-ink", root.renderPath,
-        String(IconRules.blurRadius(request.pixelSize.width, request.pixelSize.height)),
         Math.round(IconRules.fringeAlpha * 100) + "%",
+        String(IconRules.opticalBlur),
         Math.round(IconRules.opticalLevel * 100) + "%"]
       inspector.running = true
     }, request.pixelSize)
@@ -111,6 +126,7 @@ Item {
     var width = Number(fields[5]), height = Number(fields[6])
     var straight = box.exec(fields[7])
     var coverage = Number(fields[8]), peak = Number(fields[9])
+    var raw = fields.length > 10 ? box.exec(fields[10]) : null
 
     if (!straight || !(width > 0) || !(height > 0)) return null
     if (!(peak > IconRules.fringeAlpha)) return null
@@ -119,6 +135,7 @@ Item {
     var inkWidth = Number(straight[1]), inkHeight = Number(straight[2])
     var result = {
       rect: null,
+      blob: null,
       // The ramps run black to white across w-1 pixels, so a mean read
       // against them is a fraction of that span rather than of the render.
       centroid: Qt.point(width > 1 ? (rampX / coverage) * (width - 1) / width : 0.5,
@@ -129,11 +146,18 @@ Item {
       diagonalWidth: 0,
       diagonalHeight: 0
     }
-    if (inkWidth <= 0 || inkHeight <= 0) {
+    if (inkWidth > 0 && inkHeight > 0) {
+      result.blob = Qt.rect(Number(straight[3]) / width, Number(straight[4]) / height,
+        inkWidth / width, inkHeight / height)
+    }
+    if (raw && Number(raw[1]) > 0 && Number(raw[2]) > 0) {
+      result.rect = Qt.rect(Number(raw[3]) / width, Number(raw[4]) / height,
+        Number(raw[1]) / width, Number(raw[2]) / height)
+    } else if (result.blob) {
+      result.rect = result.blob
+    } else {
       result.rect = Qt.rect(0, 0, 1, 1)
       result.centroid = Qt.point(0.5, 0.5)
-    } else {
-      result.rect = Qt.rect(Number(straight[3]) / width, Number(straight[4]) / height, inkWidth / width, inkHeight / height)
     }
 
     if (turned && turnedWidth > 0 && turnedHeight > 0) {

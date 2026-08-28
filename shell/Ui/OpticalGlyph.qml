@@ -16,17 +16,42 @@ Item {
   property real fontSize: Style.font.body
   property color color: Color.foreground
   property bool normalize: false
+  // Which axis the glyph is sized to fill: its height across a horizontal
+  // bar, its width down a vertical one. Filling the block on that axis is
+  // what leaves every icon in a row the same size.
+  property bool fillHeight: true
   property bool debugBounds: false
 
   readonly property int renderedFontSize: Math.max(1, Math.round(fontSize))
   readonly property real baseInkWidth: Math.max(1, baseMetrics.tightBoundingRect.width)
   readonly property real baseInkHeight: Math.max(1, baseMetrics.tightBoundingRect.height)
-  // Fitted to whichever axis of the item binds first, so a glyph in a canvas
-  // wider than it is tall comes out full height rather than squashed to the
-  // width of one square.
+  // The mark measured once on its own, at a reference size, in a box far
+  // larger than it needs. Every render the fit looks at is grabbed at the size
+  // of the canvas, so ink reaching past it is cut off by the grab and measures
+  // as exactly the canvas — which is what made earlier attempts at this
+  // quietly do nothing at all. Measured here, nothing can be cut off and
+  // nothing depends on the canvas, so the size to render at and how far to
+  // condense are arithmetic rather than a hunt. Cached per glyph and family.
+  readonly property int probePixelSize: 64
+  property var probeInk: null
+  readonly property real naturalAspect: probeInk && probeInk.aspect > 0
+    ? probeInk.aspect : baseInkWidth / baseInkHeight
+  readonly property real inkWidthRatio: probeInk && probeInk.widthRatio > 0
+    ? probeInk.widthRatio : baseInkWidth / renderedFontSize
+  readonly property real inkHeightRatio: probeInk && probeInk.heightRatio > 0
+    ? probeInk.heightRatio : baseInkHeight / renderedFontSize
+
+  // Sized so the mark's ink fills the block across the bar.
   readonly property real metricScale: normalize && width > 0 && height > 0
-    ? Math.min(width / baseInkWidth, height / baseInkHeight)
+    ? (fillHeight
+        ? (height / Math.max(0.0001, inkHeightRatio)) / renderedFontSize
+        : (width / Math.max(0.0001, inkWidthRatio)) / renderedFontSize)
     : 1
+  // A mark wider than the block is condensed toward square rather than shrunk,
+  // so it keeps the row's height instead of reading half of it.
+  readonly property real squashX: normalize && fillHeight ? IconRules.squashFor(naturalAspect) : 1
+  readonly property real squashY: normalize && !fillHeight
+    ? IconRules.squashFor(1 / Math.max(0.0001, naturalAspect)) : 1
   // Corrections the measured pixels asked for, on top of the metric estimate.
   property real pixelScale: 1
   property real pixelOffsetX: 0
@@ -67,18 +92,6 @@ Item {
   property int inkRevision: 0
   // The closest pass so far, restored if later passes only overshoot.
   property var bestPass: null
-  // How wide the rendered ink is against its own height. The canvas is sized
-  // from this, and the font's own metrics disagree with what actually
-  // rasterizes, so it has to come from the same ink the rules are judged on.
-  //
-  // A render is grabbed at the size of this item, so ink hanging outside the
-  // canvas is cut off by the grab and a glyph that starts too wide measures
-  // exactly one canvas wide. The aspect therefore keeps being taken until the
-  // fit settles and the ink is inside, and is then frozen — otherwise a glyph
-  // whose aspect sits near the rounding line would swap between one square
-  // and two forever, each canvas making the other look right.
-  property real latchedAspect: 0
-  property bool aspectSettled: false
   property bool destroying: false
   readonly property var inkViolations: normalize ? IconRules.evaluate(inkCompass) : []
   // The lit box as fractions of this item: measured once the pixels are in,
@@ -92,7 +105,12 @@ Item {
 
   // Everything that shapes the render, for the session cache.
   function inkKey() {
-    return [fontFamily, text, renderedFontSize, width, height, inspectScale].join("|")
+    // The reference measurement is part of what shapes the render, so it
+    // belongs in the key. Without it the first fit — made from the font's
+    // rough metrics before the measurement lands — is cached, and the
+    // measurement arriving afterwards only ever restores that first fit.
+    return [fontFamily, text, renderedFontSize, width, height, inspectScale,
+      naturalAspect.toFixed(4), inkHeightRatio.toFixed(4), inkWidthRatio.toFixed(4)].join("|")
   }
 
   function applyPass(pass) {
@@ -101,6 +119,30 @@ Item {
     pixelOffsetY = pass.pixelOffsetY
     inkMeasurement = pass.measurement
     inkCompass = pass.compass
+  }
+
+  function probeCacheKey() {
+    return "probe|" + fontFamily + "|" + text + "|" + probePixelSize
+  }
+
+  function measureProbe() {
+    if (destroying || !normalize || text === "" || !hostWindow) return
+    var key = probeCacheKey()
+    var cached = InkCache.get(key)
+    if (cached) {
+      probeInk = cached
+      return
+    }
+    var side = Math.max(1, Math.round(probeItem.width * 2))
+    probeMeasure.measure(probeItem, Qt.size(side, side), function(result) {
+      if (!root || root.destroying || !result || !result.rect) return
+      var w = result.rect.width * probeItem.width
+      var h = result.rect.height * probeItem.height
+      if (!(w > 0) || !(h > 0)) return
+      var ink = { aspect: w / h, widthRatio: w / root.probePixelSize, heightRatio: h / root.probePixelSize }
+      InkCache.set(key, ink)
+      root.probeInk = ink
+    })
   }
 
   function requestInk() {
@@ -137,11 +179,8 @@ Item {
         return
       }
 
-      if (!root.aspectSettled && result.rect.width > 0 && result.rect.height > 0) {
-        root.latchedAspect = (result.rect.width * root.width) / (result.rect.height * root.height)
-      }
 
-      var compass = IconRules.compass(result, root.width, root.height)
+      var compass = IconRules.compass(result, root.width, root.height, !root.fillHeight)
       var pass = { pixelScale: root.pixelScale, pixelOffsetX: root.pixelOffsetX, pixelOffsetY: root.pixelOffsetY,
         measurement: result, compass: compass }
       root.inkMeasurement = result
@@ -150,47 +189,79 @@ Item {
       var reached = IconRules.distance(compass)
       if (reached < best) root.bestPass = pass
 
-      // Passes run until the glyph stops getting better, not until it is
-      // merely inside tolerance. A native glyph can only be placed on whole
-      // device pixels, so the last fraction of a pixel is not correctable and
-      // a pass that no longer improves has found that floor; stopping at the
-      // first acceptable pass instead leaves each glyph wherever it first
-      // landed, which is what makes a row of them sit at slightly different
-      // heights.
-      if (reached >= best - 0.01 || root.inkPasses >= IconRules.maxPasses) {
+      // Run until the rules actually hold, not until a pass stops improving.
+      // The correction is proportional, so a pass can overshoot and look like
+      // no progress while the next one lands it — and stopping there reverts
+      // to the very first placement, which is the one made before anything had
+      // been measured at all. The best pass is kept regardless, so the extra
+      // passes can only help; the size is already settled by the reference
+      // measurement, so they are cheap.
+      // The shared rule only asks that the mark reach the canvas on some axis,
+      // because a drawn icon is fitted to whichever edge it meets first. A
+      // glyph is held to more than that: it has to reach the block on the axis
+      // it was sized for, or the row is not level. Settling for the shared
+      // rule lets a glyph stop while it is still only as tall as the rough
+      // estimate made before it was measured.
+      var acrossMargin = root.fillHeight
+        ? Math.max(compass.n, compass.s)
+        : Math.max(compass.e, compass.w)
+      var settled = IconRules.evaluate(compass).length === 0
+        && acrossMargin <= IconRules.slack(compass)
+      if (settled || root.inkPasses >= IconRules.maxPasses) {
         root.applyPass(root.bestPass)
         root.inkVerified = true
-        root.aspectSettled = true
         InkCache.set(key, root.bestPass)
         return
       }
 
-      // Grow or shrink until the ink spans the canvas, shift until its
-      // weight sits on the canvas center, then look again. Size answers to
-      // how far the glyph reaches and position to where it weighs, so a
-      // top-heavy or bottom-heavy glyph comes out level with its neighbours
-      // rather than merely boxed like them.
+      // The reference measurement settled the size, so the passes only take
+      // back the last fraction of a pixel the rasterizer shaved off the filled
+      // axis, and centre the weight along the bar.
       var r = result.rect
-      if (r.width > 0 && r.height > 0) root.pixelScale *= Math.min(1 / r.width, 1 / r.height)
-      var shift = IconRules.balanceShift(r, result.centroid, IconRules.balanceAllowance(Math.min(root.width, root.height)))
+      var filled = root.fillHeight ? r.height : r.width
+      if (filled > 0) root.pixelScale *= 1 / filled
+      var shift = IconRules.balanceShift(r, result.centroid,
+        IconRules.balanceAllowance(Math.min(root.width, root.height)), root.fillHeight ? "y" : "x")
       root.pixelOffsetX += shift.x * root.width
       root.pixelOffsetY += shift.y * root.height
       Qt.callLater(root.measureInk)
     })
   }
 
-  onTextChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
-  onFontFamilyChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
-  onRenderedFontSizeChanged: { latchedAspect = 0; aspectSettled = false; requestInk() }
+  onTextChanged: { probeInk = null; measureProbe(); requestInk() }
+  onFontFamilyChanged: { probeInk = null; measureProbe(); requestInk() }
+  onRenderedFontSizeChanged: requestInk()
+  onProbeInkChanged: requestInk()
   onWidthChanged: requestInk()
   onHeightChanged: requestInk()
   onNormalizeChanged: requestInk()
-  onHostWindowChanged: if (hostWindow) requestInk()
-  Component.onCompleted: requestInk()
+  onHostWindowChanged: if (hostWindow) { measureProbe(); requestInk() }
+  Component.onCompleted: { measureProbe(); requestInk() }
   Component.onDestruction: destroying = true
 
   InkMeasure {
     id: ink
+  }
+
+  InkMeasure {
+    id: probeMeasure
+  }
+
+  // Never shown; only its pixels are ever read.
+  Item {
+    id: probeItem
+    visible: false
+    width: root.probePixelSize * 3
+    height: root.probePixelSize * 3
+
+    Text {
+      anchors.centerIn: parent
+      text: root.text
+      color: "white"
+      font.family: root.fontFamily
+      font.pixelSize: root.probePixelSize
+      renderType: Text.NativeRendering
+    }
   }
 
   TextMetrics {
@@ -214,6 +285,13 @@ Item {
     color: root.color
     font: root.glyphFont
     renderType: Text.NativeRendering
+
+    transform: Scale {
+      origin.x: glyph.width / 2
+      origin.y: glyph.height / 2
+      xScale: root.squashX
+      yScale: root.squashY
+    }
   }
 
   Rectangle {
