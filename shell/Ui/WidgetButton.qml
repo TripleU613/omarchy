@@ -550,6 +550,7 @@ Item {
     }
 
     Text {
+      textFormat: Text.PlainText
       id: label
       anchors.verticalCenter: parent.verticalCenter
       visible: root.labelVisible && root.labelText !== "" && root.iconComponent === null

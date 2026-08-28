@@ -273,6 +273,7 @@ Item {
     height: root.probePixelSize * 2
 
     Text {
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       text: root.text
       color: "white"
@@ -296,6 +297,7 @@ Item {
   }
 
   Text {
+    textFormat: Text.PlainText
     id: glyph
     x: (root.width - width) / 2 + root.horizontalCorrection + root.pixelOffsetX
     y: (root.height - height) / 2 + root.verticalCorrection + root.pixelOffsetY
