@@ -155,11 +155,20 @@ ShellRoot {
       fail("the density nudge is not bounded")
       return false
     }
-    // Every icon keeps one square canvas, so the open-panel mark under one is
-    // the same length as under any other.
+    // Every lone icon keeps the same canvas as every other, so the open-panel
+    // mark under one is the same length as under any other. It is wider than
+    // the block along the bar, which is where a wide mark's long axis lands.
     if (Math.abs(vector.opticalWidth - wideGlyph.opticalWidth) > 0.001
-        || Math.abs(vector.opticalWidth - vector.opticalHeight) > 0.001) {
-      fail("icons do not share one square canvas")
+        || Math.abs(vector.opticalHeight - wideGlyph.opticalHeight) > 0.001) {
+      fail("icons do not share one canvas: " + vector.opticalWidth + "x" + vector.opticalHeight
+        + " vs " + wideGlyph.opticalWidth + "x" + wideGlyph.opticalHeight)
+      return false
+    }
+    // A wide mark comes out at the row's proportions rather than a fraction of
+    // its height: fitting the long side alone is what made it read as broken.
+    if (!(wideGlyph.glyphPaintedHeight > vector.glyphPaintedHeight * 0.6)) {
+      fail("a wide glyph renders far shorter than a square one: "
+        + wideGlyph.glyphPaintedHeight + " vs " + vector.glyphPaintedHeight)
       return false
     }
     return true
@@ -170,8 +179,15 @@ ShellRoot {
     if (!same(IconRules.evaluate(null), ["unmeasured"])) return fail("rules accept a missing measurement"), false
     if (!same(IconRules.evaluate({ n: 0.4, s: 0.6, e: 2.5, w: 2.5, nw: 3, ne: 3, se: 3, sw: 3, balanceX: 0, balanceY: 0.2 }), []))
       return fail("rules reject an icon that fills one axis and balances"), false
-    if (!same(IconRules.evaluate({ n: 2, s: 2, e: 2, w: 2, balanceX: 0, balanceY: 0 }), ["fill"]))
-      return fail("rules miss an icon short of its canvas"), false
+    // A mark far smaller than its block is short, however centered it is.
+    if (!same(IconRules.evaluate({ n: 8, s: 8, e: 8, w: 8, balanceX: 0, balanceY: 0,
+        block: 40, canvasWidth: 40, canvasHeight: 40 }), ["sized"]))
+      return fail("rules miss an icon far short of its block"), false
+    // And one fitted by the middle of its dimensions is not called short for
+    // failing to touch an edge.
+    if (!same(IconRules.evaluate({ n: 3, s: 3, e: 3, w: 3, balanceX: 0, balanceY: 0,
+        block: 40, canvasWidth: 40, canvasHeight: 40 }), []))
+      return fail("rules fault a mark fitted by the middle of its dimensions"), false
     // A box centered to the pixel still fails if the weight inside it is not:
     // that is the icon that reads high or low in an otherwise level row.
     // A mark pressed against one end has spent its room and is not faulted.

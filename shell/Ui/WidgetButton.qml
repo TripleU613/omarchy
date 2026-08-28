@@ -128,8 +128,14 @@ Item {
   // The room a wide mark needs to be condensed into belongs to a lone icon.
   // A glyph beside a label gets the plain block, so a labelled button is
   // exactly the width it has always been.
-  readonly property real opticalWidth: opticalSize
-  readonly property real opticalHeight: opticalSize
+  // A lone icon's canvas is cut wider along the bar so the long axis of a wide
+  // mark has somewhere to land. A glyph beside a label keeps the plain block,
+  // so a labelled button is exactly the width it has always been — widening
+  // those grows the button, and widgets size their own chrome against it.
+  readonly property real opticalWidth: vertical || !iconOnly
+    ? opticalSize : opticalSize * IconRules.canvasRoom
+  readonly property real opticalHeight: vertical && iconOnly
+    ? opticalSize * IconRules.canvasRoom : opticalSize
   readonly property real slotGrowth: 0
 
   readonly property bool iconInkMeasured: iconFit.measured
@@ -264,7 +270,10 @@ Item {
         // thing up enormously. Glyphs are measured once, on their own, so they
         // do not have that problem.
         readonly property real fitScale: inkRect.width > 0 && inkRect.height > 0
-          ? Math.min(1 / inkRect.width, 1 / inkRect.height) * IconRules.weightFit(inkCoverage)
+          ? Math.min(
+              IconRules.meanFit(inkRect.width * width, inkRect.height * height,
+                Math.min(width, height)) * IconRules.weightFit(inkCoverage),
+              Math.min(1 / inkRect.width, 1 / inkRect.height))
           : 1
         readonly property real fitScaleX: fitScale
         readonly property real fitScaleY: fitScale

@@ -46,8 +46,13 @@ Item {
   readonly property real inkHeightPixels: Math.max(0.0001, inkHeightRatio * renderedFontSize)
   // Scaled until the ink meets whichever edge comes first, then nudged by how
   // densely it is inked so a solid mark does not loom over a hairline one.
+  // Fitted by the middle of the mark's two dimensions and nudged for density,
+  // then held so it can never outgrow the canvas that has to hold it.
+  readonly property real block: Math.min(width, height)
   readonly property real rawMetricScale: normalize && width > 0 && height > 0
-    ? Math.min(width / inkWidthPixels, height / inkHeightPixels) * IconRules.weightFit(inkCoverage)
+    ? Math.min(
+        IconRules.meanFit(inkWidthPixels, inkHeightPixels, block) * IconRules.weightFit(inkCoverage),
+        Math.min(width / inkWidthPixels, height / inkHeightPixels))
     : 1
   // However the measurement came out, a glyph is never drawn far larger than
   // the canvas that has to hold it. Belt and braces: the band above should

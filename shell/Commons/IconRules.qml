@@ -62,6 +62,21 @@ QtObject {
   // Rounding to nearest is what keeps the extra squares to the marks that
   // really are wide. Rounding up would hand a second square to a 1.1:1 icon
   // and most of the row would be two squares wide, which is no grid at all.
+  // A mark is fitted by the middle of its two dimensions, not by whichever
+  // one reaches furthest. Fitting the long side alone halves a mark twice as
+  // wide as it is tall — it renders at a fraction of the row's height and
+  // reads as a mistake. Fitting the short side alone inflates that same mark
+  // into a slab that dominates everything beside it. The middle of the two
+  // gives it the row's proportions without either failure.
+  //
+  // A lone icon's canvas is cut wider than the block for that reason: the
+  // long axis of a wide mark has to land somewhere.
+  readonly property real canvasRoom: 1.45
+  function meanFit(inkWidth, inkHeight, block) {
+    if (!(inkWidth > 0) || !(inkHeight > 0) || !(block > 0)) return 1
+    return block / Math.sqrt(inkWidth * inkHeight)
+  }
+
   // Two icons the same size on a ruler are not the same size to a reader. A
   // solid slab and a hairline arc filling the same box are nowhere near the
   // same weight, and sizing purely by the box is what leaves a dense mark
@@ -124,6 +139,10 @@ QtObject {
       // The axis across the bar: the one the block is measured on and the
       // mark has to fill.
       crossAxis: vertical === true ? "x" : "y",
+      // The canvas, so the rules can work back to the mark's own size.
+      block: Math.min(canvasWidth, canvasHeight),
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight,
       // One pixel of the render, in the canvas's own logical pixels.
       pixel: measurement.width > 0 ? canvasWidth / measurement.width : 0
     }
@@ -168,8 +187,8 @@ QtObject {
   }
 
   // The rules, applied to compass margins. Empty when the icon passes.
-  //   fill       the mark reaches its canvas on the axis it was fitted to,
-  //              so it is never adrift in the middle of it
+  //   sized      the mark came out the size the block asks for, measured the
+  //              way it is fitted: by the middle of its two dimensions
   //   balanced   the ink's weight sits centered along the bar, where there is
   //              room to move it. Across the bar `fill` already has it
   //              spanning the block, which is what makes a row read level
@@ -179,12 +198,22 @@ QtObject {
     if (!margins) return ["unmeasured"]
     var allowed = slack(margins)
     var problems = []
-    // Reaching the canvas on the axis it was fitted to. A glyph is fitted
-    // across the bar, so that is the axis it fills; a drawn icon is fitted to
-    // whichever edge its ink meets first. Either way it must reach one.
-    var vertical = Math.max(margins.n, margins.s)
-    var horizontal = Math.max(margins.e, margins.w)
-    if (Math.min(vertical, horizontal) > allowed) problems.push("fill")
+    // The mark comes out the size the block asks for. Measured the way it is
+    // fitted — by the middle of its two dimensions — because that is the
+    // promise being made: not that it touches an edge, which a mark fitted
+    // this way deliberately does not, but that it is neither a fraction of
+    // the row's size nor looming over it. The allowance covers the shrink the
+    // density rule above is itself permitted, or the two rules would spend
+    // their time contradicting each other.
+    if (margins.block > 0 && margins.canvasWidth > 0 && margins.canvasHeight > 0) {
+      var inkWide = margins.canvasWidth - margins.e - margins.w
+      var inkTall = margins.canvasHeight - margins.n - margins.s
+      if (inkWide > 0 && inkTall > 0) {
+        var mean = Math.sqrt(inkWide * inkTall)
+        var room = allowed + margins.block * (1 - weightFitMin)
+        if (Math.abs(mean - margins.block) > room) problems.push("sized")
+      }
+    }
     // Weight is only judged where there is room to move the mark. A mark that
     // reaches both ends of its canvas along the bar is already pinned by its
     // own size, and asking it to balance as well is asking the impossible.
