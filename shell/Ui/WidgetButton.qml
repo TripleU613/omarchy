@@ -126,8 +126,12 @@ Item {
     : (hasIconGlyph ? glyph.squashX : 1)
   // Every icon keeps one slot: a wide mark is condensed into its canvas
   // rather than handed more of the bar.
-  readonly property real opticalWidth: vertical ? opticalSize : opticalSize * IconRules.maxAspect
-  readonly property real opticalHeight: vertical ? opticalSize * IconRules.maxAspect : opticalSize
+  // The room a wide mark needs to be condensed into belongs to a lone icon.
+  // A glyph beside a label gets the plain block, so a labelled button is
+  // exactly the width it has always been.
+  readonly property real blockRoom: opticalSize * IconRules.maxAspect * IconRules.canvasSlack
+  readonly property real opticalWidth: vertical || !iconOnly ? opticalSize : blockRoom
+  readonly property real opticalHeight: vertical && iconOnly ? blockRoom : opticalSize
   readonly property real slotGrowth: 0
 
   readonly property bool iconInkMeasured: iconFit.measured
@@ -216,6 +220,7 @@ Item {
         fontSize: root.fontSize
         normalize: true
         fillHeight: !root.vertical
+        fitToBlock: root.iconOnly
         color: root.contentColor
         debugBounds: root.debugOpticalBounds
 

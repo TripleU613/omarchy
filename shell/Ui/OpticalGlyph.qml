@@ -20,6 +20,12 @@ Item {
   // bar, its width down a vertical one. Filling the block on that axis is
   // what leaves every icon in a row the same size.
   property bool fillHeight: true
+  // Only a lone icon is held to the block. A glyph beside a label keeps the
+  // fit it always had — scaled until its ink meets whichever edge comes first,
+  // never condensed — because a row of icons is made of lone icons, and giving
+  // a labelled button the extra room a wide mark needs makes the button wider,
+  // which third-party widgets size their own chrome against.
+  property bool fitToBlock: true
   property bool debugBounds: false
 
   readonly property int renderedFontSize: Math.max(1, Math.round(fontSize))
@@ -42,10 +48,14 @@ Item {
     ? probeInk.heightRatio : baseInkHeight / renderedFontSize
 
   // Sized so the mark's ink fills the block across the bar.
+  readonly property real inkWidthPixels: Math.max(0.0001, inkWidthRatio * renderedFontSize)
+  readonly property real inkHeightPixels: Math.max(0.0001, inkHeightRatio * renderedFontSize)
   readonly property real rawMetricScale: normalize && width > 0 && height > 0
-    ? (fillHeight
-        ? (height / Math.max(0.0001, inkHeightRatio)) / renderedFontSize
-        : (width / Math.max(0.0001, inkWidthRatio)) / renderedFontSize)
+    ? (fitToBlock
+        ? (fillHeight
+            ? (height / Math.max(0.0001, inkHeightRatio)) / renderedFontSize
+            : (width / Math.max(0.0001, inkWidthRatio)) / renderedFontSize)
+        : Math.min(width / inkWidthPixels, height / inkHeightPixels))
     : 1
   // However the measurement came out, a glyph is never drawn far larger than
   // the canvas that has to hold it. Belt and braces: the band above should
@@ -58,8 +68,9 @@ Item {
     : 1
   // A mark wider than the block is condensed toward square rather than shrunk,
   // so it keeps the row's height instead of reading half of it.
-  readonly property real squashX: normalize && fillHeight ? IconRules.squashFor(naturalAspect) : 1
-  readonly property real squashY: normalize && !fillHeight
+  readonly property real squashX: normalize && fitToBlock && fillHeight
+    ? IconRules.squashFor(naturalAspect) : 1
+  readonly property real squashY: normalize && fitToBlock && !fillHeight
     ? IconRules.squashFor(1 / Math.max(0.0001, naturalAspect)) : 1
   // Corrections the measured pixels asked for, on top of the metric estimate.
   property real pixelScale: 1
@@ -222,7 +233,7 @@ Item {
         ? Math.max(compass.n, compass.s)
         : Math.max(compass.e, compass.w)
       var settled = IconRules.evaluate(compass).length === 0
-        && acrossMargin <= IconRules.slack(compass)
+        && (!root.fitToBlock || acrossMargin <= IconRules.slack(compass))
       if (settled || root.inkPasses >= IconRules.maxPasses) {
         root.applyPass(root.bestPass)
         root.inkVerified = true
@@ -234,7 +245,9 @@ Item {
       // back the last fraction of a pixel the rasterizer shaved off the filled
       // axis, and centre the weight along the bar.
       var r = result.rect
-      var filled = root.fillHeight ? r.height : r.width
+      var filled = root.fitToBlock
+        ? (root.fillHeight ? r.height : r.width)
+        : Math.max(r.width, r.height)
       if (filled > 0) root.pixelScale *= 1 / filled
       var shift = IconRules.balanceShift(r, result.centroid,
         IconRules.balanceAllowance(Math.min(root.width, root.height)), root.fillHeight ? "y" : "x")

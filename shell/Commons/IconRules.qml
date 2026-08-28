@@ -68,6 +68,11 @@ QtObject {
   // rather than shrunk — shrinking is what leaves it reading half the height
   // of the row, which is the thing filling the block was meant to fix.
   readonly property real maxAspect: 1.25
+  // The canvas is cut a little wider than that, so a mark condensed right to
+  // the limit still lands inside it. Landing exactly on the edge means the
+  // render is clipped by a fraction of a pixel, and the fit then spends every
+  // pass fighting a measurement of its own clipping.
+  readonly property real canvasSlack: 1.08
   // How far a mark may be condensed before the distortion costs more than the
   // even height buys.
   readonly property real minSquash: 0.55
