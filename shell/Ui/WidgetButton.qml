@@ -117,21 +117,19 @@ Item {
   // rasterized ink the rules judge, so a glyph the font calls square can
   // still render half the height of the row. Held, so widening the canvas
   // below cannot feed back into it.
-  readonly property real iconAspect: iconComponent !== null
-    ? iconFit.fitAspect
-    : (hasIconGlyph ? glyph.naturalAspect : 1)
+  readonly property real iconAspect: hasIconGlyph ? glyph.naturalAspect : 1
   // How far the mark ended up condensed; 1 is untouched.
+  // How far the fit was nudged for density; 1 is untouched.
   readonly property real iconSquash: iconComponent !== null
-    ? iconFit.fitSquash
-    : (hasIconGlyph ? glyph.squashX : 1)
+    ? IconRules.weightFit(iconFit.inkCoverage)
+    : (hasIconGlyph ? IconRules.weightFit(glyph.inkCoverage) : 1)
   // Every icon keeps one slot: a wide mark is condensed into its canvas
   // rather than handed more of the bar.
   // The room a wide mark needs to be condensed into belongs to a lone icon.
   // A glyph beside a label gets the plain block, so a labelled button is
   // exactly the width it has always been.
-  readonly property real blockRoom: opticalSize * IconRules.maxAspect * IconRules.canvasSlack
-  readonly property real opticalWidth: vertical || !iconOnly ? opticalSize : blockRoom
-  readonly property real opticalHeight: vertical && iconOnly ? blockRoom : opticalSize
+  readonly property real opticalWidth: opticalSize
+  readonly property real opticalHeight: opticalSize
   readonly property real slotGrowth: 0
 
   readonly property bool iconInkMeasured: iconFit.measured
@@ -219,8 +217,6 @@ Item {
         fontFamily: root.fontFamily
         fontSize: root.fontSize
         normalize: true
-        fillHeight: !root.vertical
-        fitToBlock: root.iconOnly
         color: root.contentColor
         debugBounds: root.debugOpticalBounds
 
@@ -268,14 +264,11 @@ Item {
         // thing up enormously. Glyphs are measured once, on their own, so they
         // do not have that problem.
         readonly property real fitScale: inkRect.width > 0 && inkRect.height > 0
-          ? Math.min(1 / inkRect.width, 1 / inkRect.height)
+          ? Math.min(1 / inkRect.width, 1 / inkRect.height) * IconRules.weightFit(inkCoverage)
           : 1
-        readonly property real fitAspect: inkRect.width > 0 && inkRect.height > 0
-          ? (inkRect.width * width) / (inkRect.height * height)
-          : 1
-        readonly property real fitSquash: 1
         readonly property real fitScaleX: fitScale
         readonly property real fitScaleY: fitScale
+        property real inkCoverage: 0
         // Where the ink lands once the fit has scaled it about the center,
         // and the shift from there that brings its weight onto the canvas
         // center. Scaling answers how far the icon reaches; the shift answers
@@ -495,6 +488,7 @@ Item {
             iconFit.measuredCentroids = centroids
             iconFit.inkRect = iconFit.unionBox()
             iconFit.inkCentroid = iconFit.meanCentroid(centroids)
+            if (result.coverage > 0) iconFit.inkCoverage = result.coverage
             iconFit.measured = true
             iconFit.requestVerify()
             if (requested !== iconFit.revision) Qt.callLater(iconFit.measure)

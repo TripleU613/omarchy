@@ -67,29 +67,11 @@ ShellRoot {
       fail(name + " optical canvas is " + icon.opticalSize)
       return false
     }
-    // The box around the ink is deliberately not what gets centered: an icon
-    // whose weight sits high in its box is pushed down so the row reads
-    // level, which leaves the box itself off center by design. What must be
-    // centered is the weight.
-    var balance = icon.inkCompass
-    if (balance) {
-      var along = balance.crossAxis === "x" ? balance.balanceY : balance.balanceX
-      if (Math.abs(along) > IconRules.slack(balance)) {
-        fail(name + " weight sits off center along the bar by " + along)
-        return false
-      }
-      // A glyph is fitted across the bar, so it has to reach its block there;
-      // a drawn icon is fitted to whichever edge it meets first.
-      if (icon.hasIconGlyph) {
-        var across = balance.crossAxis === "x"
-          ? Math.max(balance.e, balance.w)
-          : Math.max(balance.n, balance.s)
-        if (across > IconRules.slack(balance)) {
-          fail(name + " does not fill its block, short by " + across)
-          return false
-        }
-      }
-    }
+    // Whether the ink is centered, fills its canvas and stays inside it is the
+    // shared rule table's job, and checkRules runs it over every icon below.
+    // This used to re-implement the balance check here, which quietly drifted
+    // stricter than the rule itself and failed icons the rule deliberately
+    // exempts — a mark pinned by its own size cannot be moved to balance.
     if (icon.glyphPaintedWidth > icon.opticalWidth + 2 * IconRules.tolerance
         || icon.glyphPaintedHeight > icon.opticalHeight + 2 * IconRules.tolerance) {
       fail(name + " painted bounds overflow the optical canvas: " + icon.glyphPaintedWidth + "x" + icon.glyphPaintedHeight)
@@ -149,41 +131,35 @@ ShellRoot {
     return true
   }
 
-  function checkSquash() {
-    // Every icon gets the same canvas, so the open-panel mark under one is the
-    // same length as under any other.
+  function checkWeight() {
+    // Two icons the same size on a ruler are not the same size to a reader.
+    // A densely inked mark is fitted a little smaller than a sparse one, so
+    // the row reads even rather than merely measuring even.
+    if (IconRules.weightFit(IconRules.referenceCoverage) !== 1) {
+      fail("a mark at the reference density was resized anyway")
+      return false
+    }
+    var dense = IconRules.weightFit(0.75)
+    var sparse = IconRules.weightFit(0.3)
+    if (!(dense < 1) || !(sparse > 1)) {
+      fail("density does not move the fit: dense=" + dense + " sparse=" + sparse)
+      return false
+    }
+    if (!(dense < sparse)) {
+      fail("a dense mark is not fitted smaller than a sparse one")
+      return false
+    }
+    // Bounded at both ends, so no measurement can run away with the size.
+    if (IconRules.weightFit(0.999) < IconRules.weightFitMin - 0.001
+        || IconRules.weightFit(0.001) > IconRules.weightFitMax + 0.001) {
+      fail("the density nudge is not bounded")
+      return false
+    }
+    // Every icon keeps one square canvas, so the open-panel mark under one is
+    // the same length as under any other.
     if (Math.abs(vector.opticalWidth - wideGlyph.opticalWidth) > 0.001
-        || Math.abs(vector.opticalHeight - wideGlyph.opticalHeight) > 0.001) {
-      fail("icons do not share one canvas: " + vector.opticalWidth + " vs " + wideGlyph.opticalWidth)
-      return false
-    }
-    // The point of the whole thing: a 2:1 mark still fills the block's height
-    // rather than being shrunk until its width fits and reading half the
-    // height of the row.
-    var wide = wideGlyph.inkCompass
-    if (!wide || Math.max(wide.n, wide.s) > IconRules.slack(wide)) {
-      fail("a wide glyph does not fill its block: " + JSON.stringify(wide))
-      return false
-    }
-    // It gets there by being condensed toward square, not by shrinking.
-    if (!(wideGlyph.iconSquash < 1)) {
-      fail("a wide glyph was not condensed: " + wideGlyph.iconSquash)
-      return false
-    }
-    if (bluetooth.iconSquash !== 1) {
-      fail("a narrow glyph was condensed: " + bluetooth.iconSquash)
-      return false
-    }
-    if (IconRules.squashFor(1.0) !== 1 || IconRules.squashFor(IconRules.maxAspect) !== 1) {
-      fail("a mark inside the allowance was condensed anyway")
-      return false
-    }
-    if (Math.abs(IconRules.squashFor(2.0) - IconRules.maxAspect / 2.0) > 0.001) {
-      fail("a 2:1 mark is not condensed to the allowance")
-      return false
-    }
-    if (IconRules.squashFor(99) < IconRules.minSquash - 0.001) {
-      fail("condensing is not bounded")
+        || Math.abs(vector.opticalWidth - vector.opticalHeight) > 0.001) {
+      fail("icons do not share one square canvas")
       return false
     }
     return true
@@ -198,6 +174,9 @@ ShellRoot {
       return fail("rules miss an icon short of its canvas"), false
     // A box centered to the pixel still fails if the weight inside it is not:
     // that is the icon that reads high or low in an otherwise level row.
+    // A mark pressed against one end has spent its room and is not faulted.
+    if (!same(IconRules.evaluate({ n: 0, s: 0, e: 0, w: 4, balanceX: -2.2, balanceY: 0 }), []))
+      return fail("rules fault a mark that has already spent its room"), false
     if (!same(IconRules.evaluate({ n: 0, s: 0, e: 2, w: 2, balanceX: -2.2, balanceY: 0 }), ["balanced"]))
       return fail("rules miss an icon whose weight sits off center"), false
     if (!same(IconRules.evaluate({ n: 0, s: 0, e: 2, w: 2.5, balanceX: 1.4, balanceY: 0 }), ["balanced"]))
@@ -254,7 +233,7 @@ ShellRoot {
   function runChecks() {
     if (!checkRuleTable()) return
     if (!checkTwoTone()) return
-    if (!checkSquash()) return
+    if (!checkWeight()) return
     if (!checkSplit("󰂯", "󰂯", "", true)) return
     if (!checkSplit("󰄀 4", "󰄀", "4", true)) return
     if (!checkSplit("21% 󰁹", "󰁹", "21%", false)) return

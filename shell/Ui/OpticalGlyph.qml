@@ -16,16 +16,6 @@ Item {
   property real fontSize: Style.font.body
   property color color: Color.foreground
   property bool normalize: false
-  // Which axis the glyph is sized to fill: its height across a horizontal
-  // bar, its width down a vertical one. Filling the block on that axis is
-  // what leaves every icon in a row the same size.
-  property bool fillHeight: true
-  // Only a lone icon is held to the block. A glyph beside a label keeps the
-  // fit it always had — scaled until its ink meets whichever edge comes first,
-  // never condensed — because a row of icons is made of lone icons, and giving
-  // a labelled button the extra room a wide mark needs makes the button wider,
-  // which third-party widgets size their own chrome against.
-  property bool fitToBlock: true
   property bool debugBounds: false
 
   readonly property int renderedFontSize: Math.max(1, Math.round(fontSize))
@@ -46,16 +36,15 @@ Item {
     ? probeInk.widthRatio : baseInkWidth / renderedFontSize
   readonly property real inkHeightRatio: probeInk && probeInk.heightRatio > 0
     ? probeInk.heightRatio : baseInkHeight / renderedFontSize
+  readonly property real inkCoverage: probeInk && probeInk.coverage > 0 ? probeInk.coverage : 0
 
   // Sized so the mark's ink fills the block across the bar.
   readonly property real inkWidthPixels: Math.max(0.0001, inkWidthRatio * renderedFontSize)
   readonly property real inkHeightPixels: Math.max(0.0001, inkHeightRatio * renderedFontSize)
+  // Scaled until the ink meets whichever edge comes first, then nudged by how
+  // densely it is inked so a solid mark does not loom over a hairline one.
   readonly property real rawMetricScale: normalize && width > 0 && height > 0
-    ? (fitToBlock
-        ? (fillHeight
-            ? (height / Math.max(0.0001, inkHeightRatio)) / renderedFontSize
-            : (width / Math.max(0.0001, inkWidthRatio)) / renderedFontSize)
-        : Math.min(width / inkWidthPixels, height / inkHeightPixels))
+    ? Math.min(width / inkWidthPixels, height / inkHeightPixels) * IconRules.weightFit(inkCoverage)
     : 1
   // However the measurement came out, a glyph is never drawn far larger than
   // the canvas that has to hold it. Belt and braces: the band above should
@@ -68,10 +57,7 @@ Item {
     : 1
   // A mark wider than the block is condensed toward square rather than shrunk,
   // so it keeps the row's height instead of reading half of it.
-  readonly property real squashX: normalize && fitToBlock && fillHeight
-    ? IconRules.squashFor(naturalAspect) : 1
-  readonly property real squashY: normalize && fitToBlock && !fillHeight
-    ? IconRules.squashFor(1 / Math.max(0.0001, naturalAspect)) : 1
+
   // Corrections the measured pixels asked for, on top of the metric estimate.
   property real pixelScale: 1
   property real pixelOffsetX: 0
@@ -130,7 +116,7 @@ Item {
     // rough metrics before the measurement lands — is cached, and the
     // measurement arriving afterwards only ever restores that first fit.
     return [fontFamily, text, renderedFontSize, width, height, inspectScale,
-      naturalAspect.toFixed(4), inkHeightRatio.toFixed(4), inkWidthRatio.toFixed(4)].join("|")
+      naturalAspect.toFixed(4), inkHeightRatio.toFixed(4), inkCoverage.toFixed(4)].join("|")
   }
 
   function applyPass(pass) {
@@ -159,7 +145,8 @@ Item {
       var w = result.rect.width * probeItem.width
       var h = result.rect.height * probeItem.height
       if (!(w > 0) || !(h > 0)) return
-      var ink = { aspect: w / h, widthRatio: w / root.probePixelSize, heightRatio: h / root.probePixelSize }
+      var ink = { aspect: w / h, widthRatio: w / root.probePixelSize, heightRatio: h / root.probePixelSize,
+        coverage: result.coverage }
       // A glyph's ink cannot be a sliver of the size it was drawn at, nor much
       // bigger than it. A measurement outside that band is a failed one, and
       // trusting it scales the glyph by the reciprocal of a near-zero number —
@@ -207,7 +194,7 @@ Item {
       }
 
 
-      var compass = IconRules.compass(result, root.width, root.height, !root.fillHeight)
+      var compass = IconRules.compass(result, root.width, root.height)
       var pass = { pixelScale: root.pixelScale, pixelOffsetX: root.pixelOffsetX, pixelOffsetY: root.pixelOffsetY,
         measurement: result, compass: compass }
       root.inkMeasurement = result
@@ -229,11 +216,7 @@ Item {
       // it was sized for, or the row is not level. Settling for the shared
       // rule lets a glyph stop while it is still only as tall as the rough
       // estimate made before it was measured.
-      var acrossMargin = root.fillHeight
-        ? Math.max(compass.n, compass.s)
-        : Math.max(compass.e, compass.w)
       var settled = IconRules.evaluate(compass).length === 0
-        && (!root.fitToBlock || acrossMargin <= IconRules.slack(compass))
       if (settled || root.inkPasses >= IconRules.maxPasses) {
         root.applyPass(root.bestPass)
         root.inkVerified = true
@@ -245,12 +228,10 @@ Item {
       // back the last fraction of a pixel the rasterizer shaved off the filled
       // axis, and centre the weight along the bar.
       var r = result.rect
-      var filled = root.fitToBlock
-        ? (root.fillHeight ? r.height : r.width)
-        : Math.max(r.width, r.height)
+      var filled = Math.max(r.width, r.height)
       if (filled > 0) root.pixelScale *= 1 / filled
       var shift = IconRules.balanceShift(r, result.centroid,
-        IconRules.balanceAllowance(Math.min(root.width, root.height)), root.fillHeight ? "y" : "x")
+        IconRules.balanceAllowance(Math.min(root.width, root.height)))
       root.pixelOffsetX += shift.x * root.width
       root.pixelOffsetY += shift.y * root.height
       Qt.callLater(root.measureInk)
@@ -315,12 +296,6 @@ Item {
     font: root.glyphFont
     renderType: Text.NativeRendering
 
-    transform: Scale {
-      origin.x: glyph.width / 2
-      origin.y: glyph.height / 2
-      xScale: root.squashX
-      yScale: root.squashY
-    }
   }
 
   Rectangle {
