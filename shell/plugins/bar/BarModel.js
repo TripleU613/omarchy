@@ -392,6 +392,43 @@ function layoutWidgets(layout, memo) {
   return { sections: bySection, keys: Object.keys(next).sort(), entries: entries }
 }
 
+// The keys a bar of this length shows. A widget entry carrying `minBarWidth`
+// is left off any bar shorter than that, so one layout can serve a wide
+// display and a narrow one without its sections running into each other.
+// The same array comes back when nothing is dropped, so a bar wide enough for
+// every widget rebinds nothing.
+function fittingKeys(keys, entries, barLength) {
+  var list = Array.isArray(keys) ? keys : []
+  var length = Number(barLength)
+  if (!isFinite(length) || length <= 0) return list
+  var source = isPlainObject(entries) ? entries : {}
+  var kept = list.filter(function(key) {
+    var entry = source[key]
+    var min = isPlainObject(entry) ? Number(entry.minBarWidth) : NaN
+    return !isFinite(min) || min <= 0 || length >= min
+  })
+  return kept.length === list.length ? list : kept
+}
+
+// Where the center box sits along a horizontal bar, given the room left
+// between the sections anchored to the bar's two edges. The centered group --
+// centerBegin, the box, centerEnd -- stays centered while it fits in that
+// room, and slides along it rather than overprinting a neighbour once it does
+// not. A group wider than the room itself starts where the room does and runs
+// past its end: nothing can be laid out without overlap at that point, and
+// `minBarWidth` is what keeps a bar out of it.
+function centerBoxX(barWidth, boxWidth, beginWidth, endWidth, startInset, endInset) {
+  var ideal = Math.round((Number(barWidth) - Number(boxWidth)) / 2)
+  var start = Number(startInset)
+  var end = Number(endInset)
+  if (!isFinite(start) || !isFinite(end) || end <= start) return ideal
+  var lowest = start + Number(beginWidth)
+  var highest = end - Number(endWidth) - Number(boxWidth)
+  if (!isFinite(lowest) || !isFinite(highest)) return ideal
+  if (highest < lowest) return Math.round(lowest)
+  return Math.round(Math.max(lowest, Math.min(ideal, highest)))
+}
+
 // The rows a section's model shows: one per widget, under its key
 // (layoutWidgets), and a spacer before the widget at each index in `places`,
 // or after the last for the section's length. A row holds nothing but its
@@ -634,6 +671,8 @@ if (typeof module !== "undefined") {
     dropRoom: dropRoom,
     sectionRows: sectionRows,
     layoutWidgets: layoutWidgets,
+    fittingKeys: fittingKeys,
+    centerBoxX: centerBoxX,
     fadeShares: fadeShares,
     roomLengths: roomLengths,
     moveEntry: moveEntry,
