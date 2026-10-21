@@ -2183,7 +2183,11 @@ Item {
     // off a bar narrower than that, so one layout serves a wide display and a
     // narrow one (BarModel.fittingKeys).
     readonly property var shownKeys: BarModel.fittingKeys(keys, root.layoutWidgets.entries, window ? window.barLength : 0)
-    readonly property var listRows: BarModel.sectionRows(shownKeys, root.sectionSpacers(region, window), rowMemo)
+    // A drag's places index the configured section; this bar may show fewer
+    // widgets than that, so they are mapped onto what it draws before the gaps
+    // are opened (BarModel.spacerPlaces).
+    readonly property var spacerRooms: BarModel.spacerPlaces(root.sectionSpacers(region, window), keys, shownKeys)
+    readonly property var listRows: BarModel.sectionRows(shownKeys, spacerRooms, rowMemo)
 
     visible: listRows.length > 0
     flow: root.vertical ? GridLayout.TopToBottom : GridLayout.LeftToRight
